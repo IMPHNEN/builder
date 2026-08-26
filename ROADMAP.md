@@ -127,17 +127,70 @@ Builds on Phase 4 (rename / export / `deleteByUrlId` in `app/lib/persistence/db.
 
 ---
 
+## Milestone F — Extensibility & Agentic Coding
+
+> Brings Bolt's agent loop up to parity with Claude Code / OpenCode / Codex: a tool-calling agent with MCP tools, reusable skills, a plugin API, and richer agentic behaviors. These all build on the existing loop — `StreamingMessageParser` + `ActionRunner` (`app/lib/runtime/`) and the provider registry (`app/lib/.server/llm/registry.ts`) — and on the WebContainer sandbox as the execution boundary.
+
+### F1. Native tool calling (function tools) `[~]`
+- **What:** move the agent from the XML-ish `<boltAction>` wire format to structured **tool calls** (`tools` + `toolChoice` in `streamText`). Today `api.chat.ts` forces `toolChoice: 'none'`; tools are parsed from text instead.
+- **Touches:** `llm/stream-text.ts` (pass `tools`), `routes/api.chat.ts` (enable toolChoice), `runtime/message-parser.ts` + `runtime/action-runner.ts` (map tool calls → file/shell actions), `llm/prompts.ts` (drop the tag protocol once tools carry it).
+- **How others do it:** Claude Code / Codex expose first-class `read_file`/`write_file`/`run_command` tools; the model emits typed calls, not markup.
+- **Blocked on:** keeping the text-tag fallback for models without tool calling, or going tools-only.
+- **Effort:** L · **Value:** High (foundational for F2–F5)
+
+### F2. MCP (Model Context Protocol) client `[~]`
+- **What:** let users register MCP servers; Bolt discovers their tools/resources and exposes them to the model as callable tools (merged with F1's native tools).
+- **Touches:** new `lib/.server/mcp/` (client, server registry, capability negotiation), `llm/stream-text.ts` (merge MCP tools into the `tools` param), a settings UI to add servers, `worker-configuration.d.ts` for any MCP config.
+- **Note:** MCP servers are spawned processes — Cloudflare Workers can't host them, so the MCP client should run where processes can spawn (a small sidecar service, or in-browser via MCP-over-WebSocket/SSE transports only). This is the key architecture decision.
+- **How others do it:** Claude Code loads `mcpServers` from config and exposes each server's tools; OpenCode does the same via its config.
+- **Blocked on:** F1 + the transport/hosting decision (Workers can't spawn subprocesses).
+- **Effort:** L · **Value:** High
+
+### F3. Skill system `[~]`
+- **What:** reusable, discoverable "skills" — packaged prompt + tool bundles the agent can invoke (e.g. `/review`, `/init-deep`, a "run tests" skill). A skill = a markdown/manifest + optional tool set, loaded from the project (`.bolt/skills/`) or user dir.
+- **Touches:** new `lib/skills/` (loader, registry, invocation routing), `llm/prompts.ts` (inject available skills), chat input parsing in `components/chat/` for `/skill` triggers, optional UI to browse skills.
+- **How others do it:** Claude Code skills = markdown files with frontmatter + allowed-tools; OpenCode/Codex similar via agents/commands. Slash-command or auto-trigger.
+- **Blocked on:** F1 (skills want to declare tools); skill manifest format decision.
+- **Effort:** M · **Value:** High
+
+### F4. Plugin API `[~]`
+- **What:** a stable extension point so third parties can add providers, tools, UI panels, and hooks without forking — versioned `definePlugin()` contract with lifecycle hooks (`onChatStart`, `registerTool`, `registerProvider`, `registerPanel`).
+- **Touches:** new `lib/plugins/` (loader, sandboxing, API surface), `llm/registry.ts` (provider plugins), `runtime/` (tool plugins), `components/workbench/` (panel plugins).
+- **Blocked on:** F1 + F2 (plugins mostly register tools/providers); security model for running untrusted plugin code in the browser sandbox.
+- **Effort:** L · **Value:** Medium-High
+
+### F5. Subagents / parallel agentic tasks `[~]`
+- **What:** spawn isolated sub-agents for delegated work (explore the codebase, run a test suite, plan) that report back to the main loop — each with its own context and a scoped WebContainer view.
+- **Touches:** `runtime/` (sub-agent runner + result channel), `llm/stream-text.ts`, `lib/stores/workbench.ts` (per-agent state), optional UI to show parallel agent threads.
+- **How others do it:** Claude Code `Task` subagents, OpenCode background agents, Codex parallel tool runs.
+- **Blocked on:** F1; whether subagents share the WebContainer or get isolated ones (cost/isolation trade-off).
+- **Effort:** L · **Value:** High
+
+### F6. Agentic lifecycle & permissions `[~]`
+- **What:** richer loop control — plan mode (propose-before-execute), auto-approve rules per tool/action, undo/rollback of agent file changes, and run-away-loop guardrails.
+- **Touches:** `runtime/action-runner.ts` (approval gate + rollback via the Phase 4 diff snapshot), `lib/stores/settings.ts` (permission rules), `components/workbench/` (approve/deny UI), a plan-mode toggle in chat.
+- **How others do it:** Claude Code permission modes + plan mode; Codex approval policies.
+- **Blocked on:** F1; D1 (diff-review) pairs naturally here.
+- **Effort:** M · **Value:** High
+
+---
+
 ## Suggested sequencing
 
 ```
-Now (no decisions needed):   E2 → E1 → B1 → D2 → E4
+Now (no decisions needed):     E2 → E1 → B1 → D2 → E4
 Next (need one decision each): A1 (providers) → A2 → A3
-                              B3 (zip lib) 
+                              B3 (zip lib)
+Agentic core (decide wire format first): F1 → F2 → F3 → F5
+                                         F1 → F6 (with D1)
+                                         F4 (after F1 + F2)
 Blocked on auth (C2):        C2 → B2 → C1 → B4
 Blocked on UX/e2e:           D1, D3, E3
 ```
 
 **Recommended first sprint:** E2, E1, B1, D2 — all small, independent, no product decisions, and they harden CI + portability immediately.
+
+**Agentic track:** the linchpin is **F1 (native tool calling)** — MCP (F2), skills (F3), plugins (F4), subagents (F5), and permissions (F6) all assume structured tool calls instead of the text-tag protocol. Decide F1's fallback strategy first, then F2's MCP transport (Workers can't spawn MCP subprocesses — browser-side MCP-over-WebSocket/SSE or a sidecar), and the rest layer on.
 
 ---
 
