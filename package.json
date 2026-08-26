@@ -83,6 +83,7 @@
     "@types/diff": "^5.2.1",
     "@types/react": "^18.2.20",
     "@types/react-dom": "^18.2.7",
+    "fake-indexeddb": "^6.2.5",
     "fast-glob": "^3.3.2",
     "is-ci": "^3.0.1",
     "node-fetch": "^3.3.2",

@@ -2,9 +2,17 @@ import { motion, type Variants } from 'framer-motion';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'react-toastify';
 import { Dialog, DialogButton, DialogDescription, DialogRoot, DialogTitle } from '~/components/ui/Dialog';
-import { IconButton } from '~/components/ui/IconButton';
 import { ThemeSwitch } from '~/components/ui/ThemeSwitch';
-import { db, deleteById, getAll, chatId, type ChatHistoryItem } from '~/lib/persistence';
+import {
+  db,
+  deleteById,
+  getAll,
+  chatId,
+  description as descriptionAtom,
+  updateChatDescription,
+  exportChats,
+  type ChatHistoryItem,
+} from '~/lib/persistence';
 import { cubicEasingFn } from '~/utils/easings';
 import { logger } from '~/utils/logger';
 import { HistoryItem } from './HistoryItem';
@@ -68,6 +76,44 @@ export function Menu() {
     }
   }, []);
 
+  const renameItem = useCallback((id: string, nextDescription: string) => {
+    if (db) {
+      updateChatDescription(db, id, nextDescription)
+        .then(() => {
+          if (chatId.get() === id) {
+            descriptionAtom.set(nextDescription);
+          }
+
+          loadEntries();
+        })
+        .catch((error) => {
+          toast.error('Failed to rename conversation');
+          logger.error(error);
+        });
+    }
+  }, []);
+
+  const exportHistory = useCallback(() => {
+    if (db) {
+      exportChats(db)
+        .then((data) => {
+          const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const anchor = document.createElement('a');
+
+          anchor.href = url;
+          anchor.download = `bolt-chats-${new Date().toISOString().slice(0, 10)}.json`;
+          anchor.click();
+
+          URL.revokeObjectURL(url);
+        })
+        .catch((error) => {
+          toast.error('Failed to export conversations');
+          logger.error(error);
+        });
+    }
+  }, []);
+
   const closeDialog = () => {
     setDialogContent(null);
   };
@@ -118,7 +164,16 @@ export function Menu() {
             Start new chat
           </a>
         </div>
-        <div className="text-bolt-elements-textPrimary font-medium pl-6 pr-5 my-2">Your Chats</div>
+        <div className="flex items-center justify-between pl-6 pr-5 my-2">
+          <span className="text-bolt-elements-textPrimary font-medium">Your Chats</span>
+          {list.length > 0 && (
+            <button
+              title="Export chats"
+              className="i-ph:download-simple scale-110 text-bolt-elements-textSecondary hover:text-bolt-elements-textPrimary"
+              onClick={exportHistory}
+            />
+          )}
+        </div>
         <div className="flex-1 overflow-scroll pl-4 pr-5 pb-5">
           {list.length === 0 && <div className="pl-2 text-bolt-elements-textTertiary">No previous conversations</div>}
           <DialogRoot open={dialogContent !== null}>
@@ -128,7 +183,12 @@ export function Menu() {
                   {category}
                 </div>
                 {items.map((item) => (
-                  <HistoryItem key={item.id} item={item} onDelete={() => setDialogContent({ type: 'delete', item })} />
+                  <HistoryItem
+                    key={item.id}
+                    item={item}
+                    onDelete={() => setDialogContent({ type: 'delete', item })}
+                    onRename={renameItem}
+                  />
                 ))}
               </div>
             ))}

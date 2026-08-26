@@ -3,7 +3,7 @@ name: CI/CD
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
 
 jobs:
@@ -20,8 +20,10 @@ jobs:
       - name: Run type check
         run: pnpm run typecheck
 
-      # - name: Run ESLint
-      #   run: pnpm run lint
+      # Non-blocking while pre-existing @blitz/comment-syntax violations remain.
+      - name: Run ESLint
+        run: pnpm run lint
+        continue-on-error: true
 
       - name: Run tests
         run: pnpm run test

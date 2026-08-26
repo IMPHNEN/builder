@@ -1,9 +1,12 @@
 import { env } from 'node:process';
+import type { ProviderKeys } from './registry';
 
-export function getAPIKey(cloudflareEnv: Env) {
-  /**
-   * The `cloudflareEnv` is only used when deployed or when previewing locally.
-   * In development the environment variables are available through `env`.
-   */
-  return env.ANTHROPIC_API_KEY || cloudflareEnv.ANTHROPIC_API_KEY;
+/**
+ * Server-only: reads provider API keys from Cloudflare bindings, falling back to
+ * `process.env` in local development where bindings are not populated.
+ */
+export function getProviderKeys(cloudflareEnv: Env): ProviderKeys {
+  return {
+    anthropic: env.ANTHROPIC_API_KEY || cloudflareEnv.ANTHROPIC_API_KEY,
+  };
 }

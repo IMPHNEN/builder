@@ -36,7 +36,14 @@ export async function getAll(db: IDBDatabase): Promise<ChatHistoryItem[]> {
     const store = transaction.objectStore('chats');
     const request = store.getAll();
 
-    request.onsuccess = () => resolve(request.result as ChatHistoryItem[]);
+    request.onsuccess = () => {
+      const items = request.result as ChatHistoryItem[];
+
+      items.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+
+      resolve(items);
+    };
+
     request.onerror = () => reject(request.error);
   });
 }
@@ -101,6 +108,47 @@ export async function deleteById(db: IDBDatabase, id: string): Promise<void> {
     request.onsuccess = () => resolve(undefined);
     request.onerror = () => reject(request.error);
   });
+}
+
+export async function updateChatDescription(db: IDBDatabase, id: string, description: string): Promise<void> {
+  const chat = await getMessagesById(db, id);
+
+  if (!chat) {
+    throw new Error(`Chat not found: ${id}`);
+  }
+
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction('chats', 'readwrite');
+    const store = transaction.objectStore('chats');
+    const request = store.put({ ...chat, description });
+
+    request.onsuccess = () => resolve(undefined);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function deleteByUrlId(db: IDBDatabase, urlId: string): Promise<void> {
+  const chat = await getMessagesByUrlId(db, urlId);
+
+  if (chat) {
+    await deleteById(db, chat.id);
+  }
+}
+
+export interface ChatExport {
+  version: 1;
+  exportedAt: string;
+  chats: ChatHistoryItem[];
+}
+
+export async function exportChats(db: IDBDatabase): Promise<ChatExport> {
+  const chats = await getAll(db);
+
+  return {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    chats,
+  };
 }
 
 export async function getNextId(db: IDBDatabase): Promise<string> {

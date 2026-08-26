@@ -3,6 +3,7 @@ import { MAX_RESPONSE_SEGMENTS, MAX_TOKENS } from '~/lib/.server/llm/constants';
 import { CONTINUE_PROMPT } from '~/lib/.server/llm/prompts';
 import { streamText, type Messages, type StreamingOptions } from '~/lib/.server/llm/stream-text';
 import SwitchableStream from '~/lib/.server/llm/switchable-stream';
+import { logLLMError, logLLMEvent } from '~/lib/.server/llm/telemetry';
 
 export async function action(args: ActionFunctionArgs) {
   return chatAction(args);
@@ -22,12 +23,14 @@ async function chatAction({ context, request }: ActionFunctionArgs) {
         }
 
         if (stream.switches >= MAX_RESPONSE_SEGMENTS) {
+          logLLMError('chat.segments_exhausted', { switches: stream.switches, maxSegments: MAX_RESPONSE_SEGMENTS });
+
           throw Error('Cannot continue message: Maximum segments reached');
         }
 
         const switchesLeft = MAX_RESPONSE_SEGMENTS - stream.switches;
 
-        console.log(`Reached max token limit (${MAX_TOKENS}): Continuing message (${switchesLeft} switches left)`);
+        logLLMEvent('chat.continue', { maxTokens: MAX_TOKENS, switchesLeft });
 
         messages.push({ role: 'assistant', content });
         messages.push({ role: 'user', content: CONTINUE_PROMPT });
@@ -49,7 +52,7 @@ async function chatAction({ context, request }: ActionFunctionArgs) {
       },
     });
   } catch (error) {
-    console.log(error);
+    logLLMError('chat.stream_failed', { error });
 
     throw new Response(null, {
       status: 500,

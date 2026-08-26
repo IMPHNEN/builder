@@ -152,6 +152,38 @@ describe('StreamingMessageParser', () => {
       runTest(input, expected);
     });
   });
+
+  describe('continuation (token-limit resume)', () => {
+    it('should re-emit onActionOpen and deliver full content on close across segments', () => {
+      const onActionOpen = vi.fn<ActionCallback>();
+      const onActionClose = vi.fn<ActionCallback>();
+
+      const parser = new StreamingMessageParser({
+        artifactElement: () => '',
+        callbacks: { onActionOpen, onActionClose },
+      });
+
+      parser.parse(
+        'message_1',
+        '<boltArtifact title="T" id="artifact_1"><boltAction type="file" filePath="index.js">first part',
+      );
+
+      expect(onActionOpen).toHaveBeenCalledTimes(1);
+      expect(onActionClose).not.toHaveBeenCalled();
+
+      parser.parse(
+        'message_1_continue',
+        '<boltArtifact title="T" id="artifact_1"><boltAction type="file" filePath="index.js"> second part</boltAction></boltArtifact>',
+      );
+
+      expect(onActionOpen).toHaveBeenCalledTimes(2);
+      expect(onActionClose).toHaveBeenCalledTimes(1);
+      expect(onActionClose.mock.calls[0][0].action.content).toBe('second part\n');
+
+      // the parser mutates a shared action object, so open and close see the same final content
+      expect(onActionOpen.mock.calls[1][0].action).toBe(onActionClose.mock.calls[0][0].action);
+    });
+  });
 });
 
 function runTest(input: string | string[], outputOrExpectedResult: string | ExpectedResult) {

@@ -1,9 +1,12 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
+import type { LanguageModel } from 'ai';
+import { DEFAULT_MODEL } from './registry';
 
-export function getAnthropicModel(apiKey: string) {
+// kept for backwards compatibility; prefer `getModel` from `./registry` for provider selection
+export function getAnthropicModel(apiKey: string): LanguageModel {
   const anthropic = createAnthropic({
     apiKey,
   });
 
-  return anthropic('claude-3-5-sonnet-20240620');
+  return anthropic(DEFAULT_MODEL);
 }

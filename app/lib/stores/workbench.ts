@@ -211,7 +211,13 @@ export class WorkbenchStore {
   }
 
   abortAllActions() {
-    // TODO: what do we wanna do and how do we wanna recover from this?
+    for (const artifact of Object.values(this.artifacts.get())) {
+      for (const action of Object.values(artifact.runner.actions.get())) {
+        if (!action.executed || action.status === 'running') {
+          action.abort();
+        }
+      }
+    }
   }
 
   addArtifact({ messageId, title, id }: ArtifactCallbackData) {

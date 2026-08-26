@@ -2,6 +2,7 @@ import { useStore } from '@nanostores/react';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { IconButton } from '~/components/ui/IconButton';
 import { workbenchStore } from '~/lib/stores/workbench';
+import { isValidPreviewUrl } from '~/utils/preview';
 import { PortDropdown } from './PortDropdown';
 
 export const Preview = memo(() => {
@@ -11,7 +12,7 @@ export const Preview = memo(() => {
   const [isPortDropdownOpen, setIsPortDropdownOpen] = useState(false);
   const hasSelectedPreview = useRef(false);
   const previews = useStore(workbenchStore.previews);
-  const activePreview = previews[activePreviewIndex];
+  const activePreview = previews[activePreviewIndex] ?? previews[0];
 
   const [url, setUrl] = useState('');
   const [iframeUrl, setIframeUrl] = useState<string | undefined>();
@@ -26,9 +27,10 @@ export const Preview = memo(() => {
 
     const { baseUrl } = activePreview;
 
-    setUrl(baseUrl);
-    setIframeUrl(baseUrl);
-  }, [activePreview, iframeUrl]);
+    // keep a custom path the user navigated to on the same preview, else follow the port
+    setUrl((current) => (current && isValidPreviewUrl(current, baseUrl) ? current : baseUrl));
+    setIframeUrl((current) => (current && isValidPreviewUrl(current, baseUrl) ? current : baseUrl));
+  }, [activePreview]);
 
   const validateUrl = useCallback(
     (value: string) => {
@@ -36,15 +38,7 @@ export const Preview = memo(() => {
         return false;
       }
 
-      const { baseUrl } = activePreview;
-
-      if (value === baseUrl) {
-        return true;
-      } else if (value.startsWith(baseUrl)) {
-        return ['/', '?', '#'].includes(value.charAt(baseUrl.length));
-      }
-
-      return false;
+      return isValidPreviewUrl(value, activePreview.baseUrl);
     },
     [activePreview],
   );

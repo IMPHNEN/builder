@@ -2,6 +2,7 @@ export default class SwitchableStream extends TransformStream {
   private _controller: TransformStreamDefaultController | null = null;
   private _currentReader: ReadableStreamDefaultReader | null = null;
   private _switches = 0;
+  private _closed = false;
 
   constructor() {
     let controllerRef: TransformStreamDefaultController | undefined;
@@ -20,6 +21,10 @@ export default class SwitchableStream extends TransformStream {
   }
 
   async switchSource(newStream: ReadableStream) {
+    if (this._closed) {
+      throw new Error('Cannot switch source after the stream has been closed');
+    }
+
     if (this._currentReader) {
       await this._currentReader.cancel();
     }
@@ -52,9 +57,15 @@ export default class SwitchableStream extends TransformStream {
     }
   }
 
-  close() {
+  async close() {
+    if (this._closed) {
+      return;
+    }
+
+    this._closed = true;
+
     if (this._currentReader) {
-      this._currentReader.cancel();
+      await this._currentReader.cancel();
     }
 
     this._controller?.terminate();

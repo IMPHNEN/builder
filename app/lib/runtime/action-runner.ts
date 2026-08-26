@@ -25,7 +25,7 @@ export type FailedActionState = BoltAction &
 
 export type ActionState = BaseActionState | FailedActionState;
 
-type BaseActionUpdate = Partial<Pick<BaseActionState, 'status' | 'abort' | 'executed'>>;
+type BaseActionUpdate = Partial<Pick<BaseActionState, 'status' | 'abort' | 'executed' | 'content'>>;
 
 export type ActionStateUpdate =
   | BaseActionUpdate
@@ -50,7 +50,11 @@ export class ActionRunner {
     const action = actions[actionId];
 
     if (action) {
-      // action already added
+      // token-limit continue re-emits `onActionOpen` for the in-progress action; append, don't drop
+      if (!action.executed && action.status === 'pending' && typeof data.action.content === 'string') {
+        this.#updateAction(actionId, { content: action.content + data.action.content });
+      }
+
       return;
     }
 
@@ -112,9 +116,15 @@ export class ActionRunner {
         }
       }
 
-      this.#updateAction(actionId, { status: action.abortSignal.aborted ? 'aborted' : 'complete' });
+      const status = action.abortSignal.aborted ? 'aborted' : 'complete';
+
+      this.#updateAction(actionId, { status });
+
+      logger.debug(`event=action.${status} actionId=${actionId} type=${action.type}`);
     } catch (error) {
       this.#updateAction(actionId, { status: 'failed', error: 'Action failed' });
+
+      logger.error(`event=action.failed actionId=${actionId} type=${action.type}`, error);
 
       // re-throw the error to be caught in the promise chain
       throw error;
@@ -156,7 +166,11 @@ export class ActionRunner {
 
     const webcontainer = await this.#webcontainer;
 
-    let folder = nodePath.dirname(action.filePath);
+    const containerRelativePath = nodePath.isAbsolute(action.filePath)
+      ? nodePath.relative(webcontainer.workdir, action.filePath)
+      : action.filePath;
+
+    let folder = nodePath.dirname(containerRelativePath);
 
     // remove trailing slashes
     folder = folder.replace(/\/+$/g, '');
@@ -171,8 +185,8 @@ export class ActionRunner {
     }
 
     try {
-      await webcontainer.fs.writeFile(action.filePath, action.content);
-      logger.debug(`File written ${action.filePath}`);
+      await webcontainer.fs.writeFile(containerRelativePath, action.content);
+      logger.debug(`File written ${containerRelativePath}`);
     } catch (error) {
       logger.error('Failed to write file\n\n', error);
     }
