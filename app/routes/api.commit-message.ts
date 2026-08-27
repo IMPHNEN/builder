@@ -1,35 +1,29 @@
 import { type ActionFunctionArgs } from '@remix-run/cloudflare';
 import { createTextStreamResponse, toTextStream, type ModelMessage } from 'ai';
 import { resolveProviderConfigs } from '~/lib/.server/llm/provider-config';
-import { enhancerRequestSchema } from '~/lib/.server/llm/request';
+import { commitMessageRequestSchema } from '~/lib/.server/llm/request';
 import { streamText } from '~/lib/.server/llm/stream-text';
 import { stripIndents } from '~/utils/stripIndent';
 
 export async function action(args: ActionFunctionArgs) {
-  return enhancerAction(args);
-}
-
-async function enhancerAction({ request }: ActionFunctionArgs) {
-  const parsed = enhancerRequestSchema.safeParse(await request.json<unknown>());
+  const parsed = commitMessageRequestSchema.safeParse(await args.request.json<unknown>());
 
   if (!parsed.success) {
-    return Response.json({ error: 'Invalid enhancer request' }, { status: 400 });
+    return Response.json({ error: 'Invalid commit message request' }, { status: 400 });
   }
 
-  const { message, model, providerConfigs } = parsed.data;
+  const { diff, model, providerConfigs } = parsed.data;
 
   try {
     const messages: ModelMessage[] = [
       {
         role: 'user',
         content: stripIndents`
-        I want you to improve the user prompt that is wrapped in \`<original_prompt>\` tags.
+        Write a concise git commit message (conventional commits format, single line, under 72 chars) for these changes. Reply with only the commit message, nothing else.
 
-        IMPORTANT: Only respond with the improved prompt and nothing else!
-
-        <original_prompt>
-          ${message}
-        </original_prompt>
+        <changes>
+        ${diff?.slice(0, 6000) ?? 'Project export'}
+        </changes>
       `,
       },
     ];
@@ -43,9 +37,6 @@ async function enhancerAction({ request }: ActionFunctionArgs) {
   } catch (error) {
     console.log(error);
 
-    throw new Response(null, {
-      status: 500,
-      statusText: 'Internal Server Error',
-    });
+    throw new Response(null, { status: 500, statusText: 'Internal Server Error' });
   }
 }

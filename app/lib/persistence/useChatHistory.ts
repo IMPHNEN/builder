@@ -5,6 +5,7 @@ import type { UIMessage } from 'ai';
 import { toast } from 'react-toastify';
 import { workbenchStore } from '~/lib/stores/workbench';
 import { getMessages, getNextId, getUrlId, openDatabase, setMessages } from './db';
+import { normalizeMessages } from './messages';
 
 export interface ChatHistoryItem {
   id: string;
@@ -70,28 +71,35 @@ export function useChatHistory() {
 
       const { firstArtifact } = workbenchStore;
 
-      if (!urlId && firstArtifact?.id) {
-        const urlId = await getUrlId(db, firstArtifact.id);
+      let activeUrlId = urlId;
 
-        navigateChat(urlId);
-        setUrlId(urlId);
+      if (!activeUrlId && firstArtifact?.id) {
+        activeUrlId = await getUrlId(db, firstArtifact.id);
+
+        navigateChat(activeUrlId);
+        setUrlId(activeUrlId);
       }
 
       if (!description.get() && firstArtifact?.title) {
         description.set(firstArtifact?.title);
       }
 
-      if (initialMessages.length === 0 && !chatId.get()) {
+      let activeChatId = chatId.get();
+
+      if (initialMessages.length === 0 && !activeChatId) {
         const nextId = await getNextId(db);
 
-        chatId.set(nextId);
+        activeChatId = nextId;
+        chatId.set(activeChatId);
 
-        if (!urlId) {
-          navigateChat(nextId);
+        if (!activeUrlId) {
+          navigateChat(activeChatId);
         }
       }
 
-      await setMessages(db, chatId.get() as string, messages, urlId, description.get());
+      if (activeChatId) {
+        await setMessages(db, activeChatId, messages, activeUrlId, description.get());
+      }
     },
   };
 }
@@ -106,24 +114,4 @@ function navigateChat(nextId: string) {
   url.pathname = `/chat/${nextId}`;
 
   window.history.replaceState({}, '', url);
-}
-
-/**
- * Converts messages persisted with the legacy v3 `content` string into the v7
- * `parts` shape. Messages already in the new shape pass through untouched.
- */
-function normalizeMessages(messages: UIMessage[]): UIMessage[] {
-  return messages.map((message, index) => {
-    if (Array.isArray(message.parts)) {
-      return message;
-    }
-
-    const legacy = message as unknown as { content?: unknown };
-
-    return {
-      id: message.id ?? `msg-${index}`,
-      role: message.role,
-      parts: typeof legacy.content === 'string' ? [{ type: 'text' as const, text: legacy.content }] : [],
-    } as UIMessage;
-  });
 }

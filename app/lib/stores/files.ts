@@ -17,6 +17,7 @@ export interface File {
   type: 'file';
   content: string;
   isBinary: boolean;
+  binaryContent?: Uint8Array;
 }
 
 export interface Folder {
@@ -166,7 +167,12 @@ export class FilesStore {
             content = this.#decodeFileContent(buffer);
           }
 
-          this.files.setKey(sanitizedPath, { type: 'file', content, isBinary });
+          this.files.setKey(sanitizedPath, {
+            type: 'file',
+            content,
+            isBinary,
+            ...(isBinary ? { binaryContent: buffer ? new Uint8Array(buffer) : new Uint8Array() } : {}),
+          });
 
           break;
         }

@@ -1,5 +1,6 @@
 import type { UIMessage } from 'ai';
 import { createScopedLogger } from '~/utils/logger';
+import { chatExportSchema, normalizeMessages } from './messages';
 import type { ChatHistoryItem } from './useChatHistory';
 
 const logger = createScopedLogger('ChatHistory');
@@ -76,11 +77,11 @@ export async function setMessages(
   });
 }
 
-export async function getMessages(db: IDBDatabase, id: string): Promise<ChatHistoryItem> {
+export async function getMessages(db: IDBDatabase, id: string): Promise<ChatHistoryItem | undefined> {
   return (await getMessagesById(db, id)) || (await getMessagesByUrlId(db, id));
 }
 
-export async function getMessagesByUrlId(db: IDBDatabase, id: string): Promise<ChatHistoryItem> {
+export async function getMessagesByUrlId(db: IDBDatabase, id: string): Promise<ChatHistoryItem | undefined> {
   return new Promise((resolve, reject) => {
     const transaction = db.transaction('chats', 'readonly');
     const store = transaction.objectStore('chats');
@@ -92,7 +93,7 @@ export async function getMessagesByUrlId(db: IDBDatabase, id: string): Promise<C
   });
 }
 
-export async function getMessagesById(db: IDBDatabase, id: string): Promise<ChatHistoryItem> {
+export async function getMessagesById(db: IDBDatabase, id: string): Promise<ChatHistoryItem | undefined> {
   return new Promise((resolve, reject) => {
     const transaction = db.transaction('chats', 'readonly');
     const store = transaction.objectStore('chats');
@@ -140,19 +141,56 @@ export async function deleteByUrlId(db: IDBDatabase, urlId: string): Promise<voi
 }
 
 export interface ChatExport {
-  version: 1;
-  exportedAt: string;
-  chats: ChatHistoryItem[];
+  readonly version: 1;
+  readonly exportedAt: string;
+  readonly chats: ChatHistoryItem[];
 }
 
 export async function exportChats(db: IDBDatabase): Promise<ChatExport> {
-  const chats = await getAll(db);
+  const chats = (await getAll(db)).map((chat) => ({
+    ...chat,
+    messages: normalizeMessages(chat.messages),
+  }));
 
   return {
     version: 1,
     exportedAt: new Date().toISOString(),
     chats,
   };
+}
+
+export interface ImportChatsResult {
+  readonly imported: number;
+  readonly skipped: number;
+}
+
+/**
+ * Imports chats from a previously exported `ChatExport` payload. Each chat gets a
+ * fresh id and urlId so it never collides with existing entries. Malformed payloads
+ * throw a zod error; individual chats missing a urlId/description are skipped
+ * (matching what the sidebar renders).
+ */
+export async function importChats(db: IDBDatabase, payload: unknown): Promise<ImportChatsResult> {
+  const parsed = chatExportSchema.parse(payload);
+
+  let imported = 0;
+  let skipped = 0;
+
+  for (const chat of parsed.chats) {
+    if (!chat.description || !chat.urlId) {
+      skipped += 1;
+      continue;
+    }
+
+    const nextId = await getNextId(db);
+    const urlId = await getUrlId(db, chat.urlId);
+
+    await setMessages(db, nextId, normalizeMessages(chat.messages), urlId, chat.description);
+
+    imported += 1;
+  }
+
+  return { imported, skipped };
 }
 
 export async function getSetting<T>(db: IDBDatabase, key: string): Promise<T | undefined> {
@@ -220,7 +258,10 @@ async function getUrlIds(db: IDBDatabase): Promise<string[]> {
       const cursor = (event.target as IDBRequest<IDBCursorWithValue>).result;
 
       if (cursor) {
-        idList.push(cursor.value.urlId);
+        if (typeof cursor.value.urlId === 'string') {
+          idList.push(cursor.value.urlId);
+        }
+
         cursor.continue();
       } else {
         resolve(idList);

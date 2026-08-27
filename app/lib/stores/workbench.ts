@@ -220,6 +220,83 @@ export class WorkbenchStore {
     }
   }
 
+  /**
+   * Imports a GitHub repo into the WebContainer filesystem. The FS watcher picks
+   * the new files up into the FileMap automatically.
+   */
+  async importFromGitHub(repoInput: string) {
+    const { GitHubClient: githubClient, parseRepoRef } = await import('~/lib/github/client');
+    const { getGitHubToken } = await import('~/lib/stores/provider');
+
+    const token = getGitHubToken();
+
+    if (!token) {
+      throw new Error('Add a GitHub token in Model settings first');
+    }
+
+    const client = new githubClient(token);
+    const container = await webcontainer;
+
+    return client.cloneIntoProject(container, parseRepoRef(repoInput));
+  }
+
+  /**
+   * Pushes the current project files to a GitHub repo as a single commit. When no
+   * commit message is given, one is generated from the current file modifications
+   * via the active model, falling back to a default on any failure.
+   */
+  async exportToGitHub(repoInput: string, message?: string) {
+    const { GitHubClient: githubClient, parseRepoRef } = await import('~/lib/github/client');
+    const { getGitHubToken } = await import('~/lib/stores/provider');
+
+    const token = getGitHubToken();
+
+    if (!token) {
+      throw new Error('Add a GitHub token in Model settings first');
+    }
+
+    await this.saveAllFiles();
+
+    const commitMessage = message ?? (await this.#generateCommitMessage());
+
+    const client = new githubClient(token);
+    const container = await webcontainer;
+
+    return client.pushProject(container, parseRepoRef(repoInput), commitMessage);
+  }
+
+  async #generateCommitMessage(): Promise<string> {
+    const fallback = `chore: update project from Bolt (${new Date().toISOString().slice(0, 10)})`;
+
+    try {
+      const { getProviderSettings, getSelectedModel } = await import('~/lib/stores/provider');
+      const { fileModificationsToHTML } = await import('~/utils/diff');
+
+      const modifications = this.#filesStore.getFileModifications();
+      const diff = modifications ? fileModificationsToHTML(modifications) : undefined;
+
+      const response = await fetch('/api/commit-message', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          diff,
+          model: getSelectedModel(),
+          providerConfigs: getProviderSettings(),
+        }),
+      });
+
+      if (!response.ok) {
+        return fallback;
+      }
+
+      const text = (await response.text()).trim().split('\n')[0].trim();
+
+      return text.length > 0 ? text : fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
   addArtifact({ messageId, title, id }: ArtifactCallbackData) {
     const artifact = this.#getArtifact(messageId);
 

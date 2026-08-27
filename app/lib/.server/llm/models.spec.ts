@@ -65,4 +65,27 @@ describe('listModels', () => {
 
     expect(result.source).toBe('static');
   });
+
+  it('should not probe Claude-compatible endpoints with an OpenAI models request', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await listModels('claude-compatible', {
+      'claude-compatible': { apiKey: 'k', baseURL: 'https://claude.example.com/v1' },
+    });
+
+    expect(result.source).toBe('static');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('should use the static catalog when an OpenAI provider has no configuration', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await listModels('openai', {});
+
+    expect(result.source).toBe('static');
+    expect(result.models).toEqual(STATIC_MODELS.openai);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
 });

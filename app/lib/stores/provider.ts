@@ -85,3 +85,11 @@ export function getSelectedModel(): string {
 export function getProviderSettings(): ProviderSettings {
   return providerStore.get().providers;
 }
+
+export function setGitHubToken(token: string) {
+  setProviderSetting('github', { apiKey: token });
+}
+
+export function getGitHubToken(): string | undefined {
+  return providerStore.get().providers.github?.apiKey;
+}

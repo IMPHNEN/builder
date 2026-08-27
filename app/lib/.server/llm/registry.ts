@@ -2,44 +2,52 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createMistral } from '@ai-sdk/mistral';
 import { createOpenAI } from '@ai-sdk/openai';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createProviderRegistry, type LanguageModel } from 'ai';
 
 export const DEFAULT_PROVIDER = 'anthropic';
 export const DEFAULT_MODEL = 'claude-3-5-sonnet-20240620';
 
+export const SUPPORTED_PROVIDERS = [
+  'anthropic',
+  'claude-compatible',
+  'openai',
+  'openai-compatible',
+  'google',
+  'mistral',
+] as const;
+
+export type ProviderName = (typeof SUPPORTED_PROVIDERS)[number];
+
 export interface ModelConfig {
-  provider: string;
-  model: string;
+  readonly provider: string;
+  readonly model: string;
 }
 
-/**
- * Resolved configuration for a single provider. `baseURL` enables any
- * OpenAI-compatible or Anthropic-compatible endpoint (Ollama, LM Studio,
- * OpenRouter, self-hosted proxies) without a dedicated provider package.
- */
 export interface ProviderConfig {
-  apiKey?: string;
-  baseURL?: string;
+  readonly apiKey?: string;
+  readonly baseURL?: string;
 }
 
-export type ProviderConfigs = Record<string, ProviderConfig>;
+export type ProviderConfigs = Readonly<Record<string, ProviderConfig>>;
 
-type Provider = ReturnType<typeof createAnthropic>;
+type Provider =
+  | ReturnType<typeof createAnthropic>
+  | ReturnType<typeof createGoogleGenerativeAI>
+  | ReturnType<typeof createMistral>
+  | ReturnType<typeof createOpenAICompatible>;
 
 interface ProviderDescriptor {
-  name: string;
-  create: (config: ProviderConfig) => Provider;
+  readonly name: Exclude<ProviderName, 'openai' | 'openai-compatible'>;
+  readonly create: (config: ProviderConfig) => Provider;
 }
 
-const PROVIDERS: ProviderDescriptor[] = [
-  { name: 'anthropic', create: (c) => createAnthropic({ apiKey: c.apiKey, baseURL: c.baseURL }) as Provider },
-  { name: 'openai', create: (c) => createOpenAI({ apiKey: c.apiKey, baseURL: c.baseURL }) as unknown as Provider },
-  {
-    name: 'google',
-    create: (c) => createGoogleGenerativeAI({ apiKey: c.apiKey, baseURL: c.baseURL }) as unknown as Provider,
-  },
-  { name: 'mistral', create: (c) => createMistral({ apiKey: c.apiKey, baseURL: c.baseURL }) as unknown as Provider },
-];
+const PROVIDERS = [
+  { name: 'anthropic', create: (config) => createAnthropic(config) },
+  { name: 'claude-compatible', create: (config) => createAnthropic(config) },
+  { name: 'google', create: (config) => createGoogleGenerativeAI(config) },
+  { name: 'mistral', create: (config) => createMistral(config) },
+] satisfies readonly ProviderDescriptor[];
 
 export function parseModelString(modelString: string): ModelConfig {
   const separatorIndex = modelString.indexOf(':');
@@ -68,11 +76,6 @@ export function createProviderRegistryFromConfigs(configs: ProviderConfigs) {
   return createProviderRegistry(providers);
 }
 
-/**
- * Resolves a language model for `provider:model`. OpenAI routes to the Responses
- * API against the real OpenAI endpoint, and to the chat-completions API (with a
- * max-token parameter shim) against compatible endpoints.
- */
 export function getModel(
   configs: ProviderConfigs,
   modelString: string = `${DEFAULT_PROVIDER}:${DEFAULT_MODEL}`,
@@ -86,61 +89,39 @@ export function getModel(
     );
   }
 
+  if (provider === 'claude-compatible') {
+    return createClaudeCompatibleModel(config, model);
+  }
+
+  if (provider === 'openai-compatible' || (provider === 'openai' && config.baseURL)) {
+    return createOpenAICompatibleModel(config, model);
+  }
+
   if (provider === 'openai') {
-    if (config.baseURL) {
-      /**
-       * Compatible endpoint (Ollama, LM Studio, OpenRouter, proxies). These
-       * implement the chat-completions shape, not the Responses API, and many
-       * newer models reject `max_tokens`. Use the chat model and translate the
-       * parameter to `max_completion_tokens` on the way out.
-       */
-      const openai = createOpenAI({
-        apiKey: config.apiKey,
-        baseURL: config.baseURL,
-        fetch: translateMaxTokensFetch,
-      });
-
-      return openai.chat(model);
-    }
-
     return createOpenAI({ apiKey: config.apiKey }).responses(model);
   }
 
   return createProviderRegistryFromConfigs(configs).languageModel(`${provider}:${model}`);
 }
 
-const MAX_TOKEN_PARAM_KEYS = ['max_tokens', 'max_completion_tokens', 'max_output_tokens'] as const;
-
-/**
- * Wraps fetch to rewrite any max-token parameter in the request body to
- * `max_completion_tokens`, which OpenAI's newer chat models require. Leaves the
- * URL, headers, and streaming behavior untouched.
- */
-const translateMaxTokensFetch: typeof fetch = async (input, init) => {
-  if (!init?.body || typeof init.body !== 'string') {
-    return fetch(input, init);
+function createClaudeCompatibleModel(config: ProviderConfig, model: string): LanguageModel {
+  if (!config.baseURL) {
+    throw new Error('Claude-compatible provider requires a base URL.');
   }
 
-  let payload: Record<string, unknown>;
+  return createAnthropic(config).messages(model);
+}
 
-  try {
-    payload = JSON.parse(init.body);
-  } catch {
-    return fetch(input, init);
+function createOpenAICompatibleModel(config: ProviderConfig, model: string): LanguageModel {
+  if (!config.baseURL) {
+    throw new Error('OpenAI-compatible provider requires a base URL.');
   }
 
-  let maxTokens: unknown;
+  const openaiCompatible = createOpenAICompatible({
+    name: 'openai-compatible',
+    baseURL: config.baseURL,
+    apiKey: config.apiKey,
+  });
 
-  for (const key of MAX_TOKEN_PARAM_KEYS) {
-    if (payload[key] !== undefined) {
-      maxTokens = payload[key];
-      delete payload[key];
-    }
-  }
-
-  if (maxTokens !== undefined) {
-    payload.max_completion_tokens = maxTokens;
-  }
-
-  return fetch(input, { ...init, body: JSON.stringify(payload) });
-};
+  return openaiCompatible.chatModel(model);
+}

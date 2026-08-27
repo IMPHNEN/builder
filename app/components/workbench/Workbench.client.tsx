@@ -1,7 +1,7 @@
 import { useStore } from '@nanostores/react';
 import { motion, type HTMLMotionProps, type Variants } from 'framer-motion';
 import { computed } from 'nanostores';
-import { memo, useCallback, useEffect } from 'react';
+import { memo, useCallback, useEffect, useState } from 'react';
 import { toast } from 'react-toastify';
 import {
   type OnChangeCallback as OnEditorChange,
@@ -14,7 +14,9 @@ import { workbenchStore, type WorkbenchViewType } from '~/lib/stores/workbench';
 import { classNames } from '~/utils/classNames';
 import { cubicEasingFn } from '~/utils/easings';
 import { renderLogger } from '~/utils/logger';
+import { downloadZip, filesToZip } from '~/utils/zip';
 import { EditorPanel } from './EditorPanel';
+import { GitHubDialog } from './GitHubDialog.client';
 import { Preview } from './Preview';
 
 interface WorkspaceProps {
@@ -62,6 +64,8 @@ export const Workbench = memo(({ chatStarted, isStreaming }: WorkspaceProps) => 
   const unsavedFiles = useStore(workbenchStore.unsavedFiles);
   const files = useStore(workbenchStore.files);
   const selectedView = useStore(workbenchStore.currentView);
+
+  const [githubDialogOpen, setGithubDialogOpen] = useState(false);
 
   const setSelectedView = (view: WorkbenchViewType) => {
     workbenchStore.currentView.set(view);
@@ -121,6 +125,22 @@ export const Workbench = memo(({ chatStarted, isStreaming }: WorkspaceProps) => 
               <div className="flex items-center px-3 py-2 border-b border-bolt-elements-borderColor">
                 <Slider selected={selectedView} options={sliderOptions} setSelected={setSelectedView} />
                 <div className="ml-auto" />
+                <PanelHeaderButton
+                  className="mr-1 text-sm"
+                  onClick={() => {
+                    const zip = filesToZip(workbenchStore.files.get());
+                    const projectName = workbenchStore.firstArtifact?.title ?? 'project';
+
+                    downloadZip(zip, `${projectName.replace(/\W+/g, '-').toLowerCase() || 'project'}.zip`);
+                  }}
+                >
+                  <div className="i-ph:file-zip" />
+                  Download ZIP
+                </PanelHeaderButton>
+                <PanelHeaderButton className="mr-1 text-sm" onClick={() => setGithubDialogOpen(true)}>
+                  <div className="i-ph:github-logo" />
+                  GitHub
+                </PanelHeaderButton>
                 {selectedView === 'code' && (
                   <PanelHeaderButton
                     className="mr-1 text-sm"
@@ -169,6 +189,7 @@ export const Workbench = memo(({ chatStarted, isStreaming }: WorkspaceProps) => 
             </div>
           </div>
         </div>
+        <GitHubDialog open={githubDialogOpen} onOpenChange={setGithubDialogOpen} />
       </motion.div>
     )
   );

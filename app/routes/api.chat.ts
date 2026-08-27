@@ -5,12 +5,11 @@ import {
   createUIMessageStreamResponse,
   toUIMessageStream,
   type ModelMessage,
-  type UIMessage,
 } from 'ai';
-import { MAX_RESPONSE_SEGMENTS, MAX_TOKENS } from '~/lib/.server/llm/constants';
+import { getModelLimits } from '~/lib/.server/llm/constants';
 import { CONTINUE_PROMPT } from '~/lib/.server/llm/prompts';
 import { resolveProviderConfigs } from '~/lib/.server/llm/provider-config';
-import type { ProviderConfigs } from '~/lib/.server/llm/registry';
+import { chatRequestSchema } from '~/lib/.server/llm/request';
 import { streamText, type StreamTextOptions } from '~/lib/.server/llm/stream-text';
 import { logLLMError, logLLMEvent } from '~/lib/.server/llm/telemetry';
 
@@ -18,16 +17,19 @@ export async function action(args: ActionFunctionArgs) {
   return chatAction(args);
 }
 
-interface ChatRequestBody {
-  messages: UIMessage[];
-  model?: string;
-  providerConfigs?: ProviderConfigs;
-}
-
 async function chatAction({ request }: ActionFunctionArgs) {
-  const { messages, model, providerConfigs } = await request.json<ChatRequestBody>();
+  const body = await request.json<unknown>();
+  const parsed = chatRequestSchema.safeParse(body);
+
+  if (!parsed.success) {
+    return Response.json({ error: 'Invalid chat request' }, { status: 400 });
+  }
+
+  const { messages, model, providerConfigs } = parsed.data;
 
   const resolvedConfigs = resolveProviderConfigs(providerConfigs);
+
+  const limits = getModelLimits(model);
 
   try {
     const stream = createUIMessageStream({
@@ -60,12 +62,15 @@ async function chatAction({ request }: ActionFunctionArgs) {
 
           segment += 1;
 
-          if (segment >= MAX_RESPONSE_SEGMENTS) {
-            logLLMError('chat.segments_exhausted', { switches: segment, maxSegments: MAX_RESPONSE_SEGMENTS });
+          if (segment >= limits.maxResponseSegments) {
+            logLLMError('chat.segments_exhausted', { switches: segment, maxSegments: limits.maxResponseSegments });
             break;
           }
 
-          logLLMEvent('chat.continue', { maxTokens: MAX_TOKENS, switchesLeft: MAX_RESPONSE_SEGMENTS - segment });
+          logLLMEvent('chat.continue', {
+            maxTokens: limits.maxTokens,
+            switchesLeft: limits.maxResponseSegments - segment,
+          });
 
           const responseMessages = (await result.response).messages;
 

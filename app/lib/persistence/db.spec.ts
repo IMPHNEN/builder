@@ -1,6 +1,15 @@
 import { indexedDB } from 'fake-indexeddb';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { deleteByUrlId, exportChats, getAll, setMessages, updateChatDescription } from './db';
+import {
+  deleteByUrlId,
+  exportChats,
+  getAll,
+  getSetting,
+  importChats,
+  setMessages,
+  setSetting,
+  updateChatDescription,
+} from './db';
 
 // exercises the real IndexedDB implementation against an in-memory shim
 describe('db (IndexedDB via fake-indexeddb)', () => {
@@ -19,6 +28,10 @@ describe('db (IndexedDB via fake-indexeddb)', () => {
           const store = db.createObjectStore('chats', { keyPath: 'id' });
           store.createIndex('id', 'id', { unique: true });
           store.createIndex('urlId', 'urlId', { unique: true });
+        }
+
+        if (!db.objectStoreNames.contains('settings')) {
+          db.createObjectStore('settings', { keyPath: 'key' });
         }
       };
 
@@ -79,5 +92,87 @@ describe('db (IndexedDB via fake-indexeddb)', () => {
     expect(exported.chats).toHaveLength(1);
     expect(exported.chats[0].description).toBe('first');
     expect(typeof exported.exportedAt).toBe('string');
+  });
+
+  it('should import an exported payload with fresh ids and urlIds', async () => {
+    const db = await openTestDb();
+
+    await setMessages(
+      db,
+      '1',
+      [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] } as never],
+      'my-app',
+      'first',
+    );
+
+    const exported = await exportChats(db);
+    const result = await importChats(db, exported);
+
+    expect(result).toEqual({ imported: 1, skipped: 0 });
+
+    const all = await getAll(db);
+
+    expect(all).toHaveLength(2);
+
+    const imported = all.find((c) => c.description === 'first' && c.id !== '1');
+
+    expect(imported).toBeDefined();
+    expect(imported?.urlId).not.toBe('my-app');
+    expect(imported?.urlId).toBe('my-app-2');
+  });
+
+  it('should skip chats missing urlId or description during import', async () => {
+    const db = await openTestDb();
+
+    const result = await importChats(db, {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      chats: [
+        { id: 'x', messages: [], timestamp: new Date().toISOString() },
+        { id: 'y', urlId: 'ok', description: 'ok', messages: [], timestamp: new Date().toISOString() },
+      ],
+    });
+
+    expect(result).toEqual({ imported: 1, skipped: 1 });
+  });
+
+  it('should reject a malformed payload with a zod error', async () => {
+    const db = await openTestDb();
+
+    await expect(importChats(db, { version: 2, chats: [] })).rejects.toThrow();
+    await expect(importChats(db, { chats: 'nope' })).rejects.toThrow();
+    await expect(importChats(db, null)).rejects.toThrow();
+  });
+
+  it('should normalize legacy content messages during import', async () => {
+    const db = await openTestDb();
+
+    const result = await importChats(db, {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      chats: [
+        {
+          id: 'legacy-id',
+          urlId: 'legacy-chat',
+          description: 'Legacy chat',
+          messages: [{ id: 'legacy-message', role: 'user', content: 'hello from v3' }],
+          timestamp: new Date().toISOString(),
+        },
+      ],
+    });
+
+    const imported = (await getAll(db))[0];
+
+    expect(result).toEqual({ imported: 1, skipped: 0 });
+    expect(imported.messages[0]?.parts).toEqual([{ type: 'text', text: 'hello from v3' }]);
+  });
+
+  it('should round-trip provider settings in the local settings store', async () => {
+    const db = await openTestDb();
+    const settings = { model: 'openai-compatible:llama3.1', providers: { openai: { apiKey: 'key' } } };
+
+    await setSetting(db, 'provider-config', settings);
+
+    expect(await getSetting<typeof settings>(db, 'provider-config')).toEqual(settings);
   });
 });

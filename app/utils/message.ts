@@ -10,7 +10,7 @@ export function getMessageText(message: UIMessage | undefined | null): string {
     return '';
   }
 
-  const legacyContent = (message as { content?: unknown }).content;
+  const legacyContent = isRecord(message) ? message.content : undefined;
 
   if (typeof legacyContent === 'string') {
     return legacyContent;
@@ -26,4 +26,8 @@ export function getMessageText(message: UIMessage | undefined | null): string {
     .filter((part): part is { type: 'text'; text: string } => part?.type === 'text' && typeof part.text === 'string')
     .map((part) => part.text)
     .join('');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

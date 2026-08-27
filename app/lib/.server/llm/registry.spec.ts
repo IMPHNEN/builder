@@ -80,4 +80,24 @@ describe('getModel', () => {
 
     expect(providerOf(model)).toContain('chat');
   });
+
+  it('should resolve an explicit OpenAI-compatible provider', () => {
+    const model = getModel(
+      { 'openai-compatible': { apiKey: 'k', baseURL: 'https://api.example.com/v1' } },
+      'openai-compatible:llama3.1',
+    );
+
+    expect(modelIdOf(model)).toBe('llama3.1');
+    expect(providerOf(model)).toContain('openai-compatible');
+  });
+
+  it('should resolve an explicit Claude-compatible provider', () => {
+    const model = getModel(
+      { 'claude-compatible': { apiKey: 'k', baseURL: 'https://api.example.com/v1' } },
+      'claude-compatible:custom-model',
+    );
+
+    expect(modelIdOf(model)).toBe('custom-model');
+    expect(providerOf(model)).toContain('anthropic.messages');
+  });
 });

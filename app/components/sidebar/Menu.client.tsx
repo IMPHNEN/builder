@@ -11,6 +11,7 @@ import {
   description as descriptionAtom,
   updateChatDescription,
   exportChats,
+  importChats,
   type ChatHistoryItem,
 } from '~/lib/persistence';
 import { cubicEasingFn } from '~/utils/easings';
@@ -114,6 +115,42 @@ export function Menu() {
     }
   }, []);
 
+  const importHistory = useCallback(() => {
+    if (!db) {
+      return;
+    }
+
+    const database = db;
+
+    const input = document.createElement('input');
+
+    input.type = 'file';
+    input.accept = 'application/json,.json';
+
+    input.onchange = async () => {
+      const file = input.files?.[0];
+
+      if (!file) {
+        return;
+      }
+
+      try {
+        const text = await file.text();
+        const result = await importChats(database, JSON.parse(text));
+
+        toast.success(
+          `Imported ${result.imported} chat${result.imported === 1 ? '' : 's'}${result.skipped > 0 ? ` (${result.skipped} skipped)` : ''}`,
+        );
+        loadEntries();
+      } catch (error) {
+        toast.error('Failed to import conversations: invalid file');
+        logger.error(error);
+      }
+    };
+
+    input.click();
+  }, [loadEntries]);
+
   const closeDialog = () => {
     setDialogContent(null);
   };
@@ -166,13 +203,20 @@ export function Menu() {
         </div>
         <div className="flex items-center justify-between pl-6 pr-5 my-2">
           <span className="text-bolt-elements-textPrimary font-medium">Your Chats</span>
-          {list.length > 0 && (
+          <div className="flex items-center gap-2">
             <button
-              title="Export chats"
-              className="i-ph:download-simple scale-110 text-bolt-elements-textSecondary hover:text-bolt-elements-textPrimary"
-              onClick={exportHistory}
+              title="Import chats"
+              className="i-ph:upload-simple scale-110 text-bolt-elements-textSecondary hover:text-bolt-elements-textPrimary"
+              onClick={importHistory}
             />
-          )}
+            {list.length > 0 && (
+              <button
+                title="Export chats"
+                className="i-ph:download-simple scale-110 text-bolt-elements-textSecondary hover:text-bolt-elements-textPrimary"
+                onClick={exportHistory}
+              />
+            )}
+          </div>
         </div>
         <div className="flex-1 overflow-scroll pl-4 pr-5 pb-5">
           {list.length === 0 && <div className="pl-2 text-bolt-elements-textTertiary">No previous conversations</div>}

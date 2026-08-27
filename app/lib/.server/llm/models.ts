@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { ProviderConfigs } from './registry';
 
 export interface ProviderModels {
@@ -13,7 +14,9 @@ export interface ProviderModels {
  */
 export const STATIC_MODELS: Record<string, string[]> = {
   anthropic: ['claude-3-5-sonnet-20240620', 'claude-3-opus-20240229', 'claude-3-haiku-20240307'],
+  'claude-compatible': ['claude-3-5-sonnet-20240620', 'claude-3-opus-20240229'],
   openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
+  'openai-compatible': ['llama3.1', 'qwen2.5-coder', 'deepseek-coder'],
   google: ['gemini-1.5-pro', 'gemini-1.5-flash'],
   mistral: ['mistral-large-latest', 'mistral-small-latest'],
 };
@@ -23,9 +26,7 @@ const DEFAULT_BASE_URLS: Record<string, string> = {
   mistral: 'https://api.mistral.ai/v1',
 };
 
-interface ModelsListResponse {
-  data?: Array<{ id: string }>;
-}
+const modelsListResponseSchema = z.object({ data: z.array(z.object({ id: z.string() })).optional() });
 
 /**
  * Discovers models for a provider. OpenAI-compatible endpoints (including
@@ -39,9 +40,9 @@ export async function listModels(provider: string, configs: ProviderConfigs): Pr
 
   const baseURL = config?.baseURL ?? DEFAULT_BASE_URLS[provider];
 
-  const isOpenAICompatible = provider === 'openai' || provider === 'mistral' || Boolean(config?.baseURL);
+  const isOpenAICompatible = provider === 'openai' || provider === 'mistral' || provider === 'openai-compatible';
 
-  if (!isOpenAICompatible || !baseURL) {
+  if (!isOpenAICompatible || !baseURL || (!config?.apiKey && !config?.baseURL)) {
     return { provider, models: staticList, source: 'static' };
   }
 
@@ -54,7 +55,7 @@ export async function listModels(provider: string, configs: ProviderConfigs): Pr
       return { provider, models: staticList, source: 'static' };
     }
 
-    const body = (await response.json()) as ModelsListResponse;
+    const body = modelsListResponseSchema.parse(await response.json());
     const models = (body.data ?? []).map((entry) => entry.id).filter(Boolean);
 
     return { provider, models: models.length > 0 ? models : staticList, source: models.length > 0 ? 'live' : 'static' };
