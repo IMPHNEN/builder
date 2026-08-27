@@ -1,7 +1,7 @@
 import { useLoaderData, useNavigate } from '@remix-run/react';
 import { useState, useEffect } from 'react';
 import { atom } from 'nanostores';
-import type { Message } from 'ai';
+import type { UIMessage } from 'ai';
 import { toast } from 'react-toastify';
 import { workbenchStore } from '~/lib/stores/workbench';
 import { getMessages, getNextId, getUrlId, openDatabase, setMessages } from './db';
@@ -10,7 +10,7 @@ export interface ChatHistoryItem {
   id: string;
   urlId?: string;
   description?: string;
-  messages: Message[];
+  messages: UIMessage[];
   timestamp: string;
 }
 
@@ -25,7 +25,7 @@ export function useChatHistory() {
   const navigate = useNavigate();
   const { id: mixedId } = useLoaderData<{ id?: string }>();
 
-  const [initialMessages, setInitialMessages] = useState<Message[]>([]);
+  const [initialMessages, setInitialMessages] = useState<UIMessage[]>([]);
   const [ready, setReady] = useState<boolean>(false);
   const [urlId, setUrlId] = useState<string | undefined>();
 
@@ -44,7 +44,7 @@ export function useChatHistory() {
       getMessages(db, mixedId)
         .then((storedMessages) => {
           if (storedMessages && storedMessages.messages.length > 0) {
-            setInitialMessages(storedMessages.messages);
+            setInitialMessages(normalizeMessages(storedMessages.messages));
             setUrlId(storedMessages.urlId);
             description.set(storedMessages.description);
             chatId.set(storedMessages.id);
@@ -63,7 +63,7 @@ export function useChatHistory() {
   return {
     ready: !mixedId || ready,
     initialMessages,
-    storeMessageHistory: async (messages: Message[]) => {
+    storeMessageHistory: async (messages: UIMessage[]) => {
       if (!db || messages.length === 0) {
         return;
       }
@@ -106,4 +106,24 @@ function navigateChat(nextId: string) {
   url.pathname = `/chat/${nextId}`;
 
   window.history.replaceState({}, '', url);
+}
+
+/**
+ * Converts messages persisted with the legacy v3 `content` string into the v7
+ * `parts` shape. Messages already in the new shape pass through untouched.
+ */
+function normalizeMessages(messages: UIMessage[]): UIMessage[] {
+  return messages.map((message, index) => {
+    if (Array.isArray(message.parts)) {
+      return message;
+    }
+
+    const legacy = message as unknown as { content?: unknown };
+
+    return {
+      id: message.id ?? `msg-${index}`,
+      role: message.role,
+      parts: typeof legacy.content === 'string' ? [{ type: 'text' as const, text: legacy.content }] : [],
+    } as UIMessage;
+  });
 }

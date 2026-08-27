@@ -1,16 +1,18 @@
 import { useStore } from '@nanostores/react';
-import type { Message } from 'ai';
-import { useChat } from 'ai/react';
+import { useChat } from '@ai-sdk/react';
+import { DefaultChatTransport, type UIMessage } from 'ai';
 import { useAnimate } from 'framer-motion';
 import { memo, useEffect, useRef, useState } from 'react';
 import { cssTransition, toast, ToastContainer } from 'react-toastify';
 import { useMessageParser, usePromptEnhancer, useShortcuts, useSnapScroll } from '~/lib/hooks';
 import { useChatHistory } from '~/lib/persistence';
 import { chatStore } from '~/lib/stores/chat';
+import { loadProviderSettings, providerStore } from '~/lib/stores/provider';
 import { workbenchStore } from '~/lib/stores/workbench';
 import { fileModificationsToHTML } from '~/utils/diff';
 import { cubicEasingFn } from '~/utils/easings';
 import { createScopedLogger, renderLogger } from '~/utils/logger';
+import { getMessageText } from '~/utils/message';
 import { BaseChat } from './BaseChat';
 
 const toastAnimation = cssTransition({
@@ -60,8 +62,8 @@ export function Chat() {
 }
 
 interface ChatProps {
-  initialMessages: Message[];
-  storeMessageHistory: (messages: Message[]) => Promise<void>;
+  initialMessages: UIMessage[];
+  storeMessageHistory: (messages: UIMessage[]) => Promise<void>;
 }
 
 export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProps) => {
@@ -70,13 +72,27 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const [chatStarted, setChatStarted] = useState(initialMessages.length > 0);
+  const [input, setInput] = useState('');
 
   const { showChat } = useStore(chatStore);
 
   const [animationScope, animate] = useAnimate();
 
-  const { messages, isLoading, input, handleInputChange, setInput, stop, append } = useChat({
-    api: '/api/chat',
+  const { messages, status, stop, sendMessage } = useChat({
+    transport: new DefaultChatTransport({
+      api: '/api/chat',
+      prepareSendMessagesRequest: ({ messages }) => {
+        const { model, providers } = providerStore.get();
+
+        return {
+          body: {
+            messages,
+            model,
+            providerConfigs: providers,
+          },
+        };
+      },
+    }),
     onError: (error) => {
       logger.error('Request failed\n\n', error);
       toast.error('There was an error processing your request');
@@ -84,8 +100,10 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
     onFinish: () => {
       logger.debug('Finished streaming');
     },
-    initialMessages,
+    messages: initialMessages,
   });
+
+  const isLoading = status === 'submitted' || status === 'streaming';
 
   const { enhancingPrompt, promptEnhanced, enhancePrompt, resetEnhancer } = usePromptEnhancer();
   const { parsedMessages, parseMessages } = useMessageParser();
@@ -94,6 +112,7 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
 
   useEffect(() => {
     chatStore.setKey('started', initialMessages.length > 0);
+    loadProviderSettings();
   }, []);
 
   useEffect(() => {
@@ -146,12 +165,18 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
     setChatStarted(true);
   };
 
-  const sendMessage = async (_event: React.UIEvent, messageInput?: string) => {
+  const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInput(event.target.value);
+  };
+
+  const handleSendMessage = async (_event: React.UIEvent, messageInput?: string) => {
     const _input = messageInput || input;
 
     if (_input.length === 0 || isLoading) {
       return;
     }
+
+    await loadProviderSettings();
 
     /**
      * @note (delm) Usually saving files shouldn't take long but it may take longer if there
@@ -171,14 +196,7 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
     if (fileModifications !== undefined) {
       const diff = fileModificationsToHTML(fileModifications);
 
-      /**
-       * If we have file modifications we append a new user message manually since we have to prefix
-       * the user input with the file modifications and we don't want the new user input to appear
-       * in the prompt. Using `append` is almost the same as `handleSubmit` except that we have to
-       * manually reset the input and we'd have to manually pass in file attachments. However, those
-       * aren't relevant here.
-       */
-      append({ role: 'user', content: `${diff}\n\n${_input}` });
+      sendMessage({ text: `${diff}\n\n${_input}` });
 
       /**
        * After sending a new message we reset all modifications since the model
@@ -186,7 +204,7 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
        */
       workbenchStore.resetAllFileModifications();
     } else {
-      append({ role: 'user', content: _input });
+      sendMessage({ text: _input });
     }
 
     setInput('');
@@ -208,7 +226,7 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
       isStreaming={isLoading}
       enhancingPrompt={enhancingPrompt}
       promptEnhanced={promptEnhanced}
-      sendMessage={sendMessage}
+      sendMessage={handleSendMessage}
       messageRef={messageRef}
       scrollRef={scrollRef}
       handleInputChange={handleInputChange}
@@ -220,7 +238,7 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
 
         return {
           ...message,
-          content: parsedMessages[i] || '',
+          parts: [{ type: 'text' as const, text: parsedMessages[i] || getMessageText(message) }],
         };
       })}
       enhancePrompt={() => {

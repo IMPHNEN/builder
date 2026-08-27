@@ -1,45 +1,32 @@
-import { streamText as _streamText, convertToCoreMessages } from 'ai';
-import { getProviderKeys } from '~/lib/.server/llm/api-key';
-import { MAX_TOKENS } from './constants';
+import { streamText as _streamText, type ModelMessage } from 'ai';
+import { getModelLimits } from './constants';
 import { getSystemPrompt } from './prompts';
-import { getModel } from './registry';
+import { getModel, type ProviderConfigs } from './registry';
 
-interface ToolResult<Name extends string, Args, Result> {
-  toolCallId: string;
-  toolName: Name;
-  args: Args;
-  result: Result;
-}
+type BaseStreamOptions = Omit<Parameters<typeof _streamText>[0], 'model' | 'messages' | 'system' | 'maxOutputTokens'>;
 
-interface Message {
-  role: 'user' | 'assistant';
-  content: string;
-  toolInvocations?: ToolResult<string, unknown, unknown>[];
-}
-
-export type Messages = Message[];
-
-export type StreamingOptions = Omit<Parameters<typeof _streamText>[0], 'model'>;
-
-export interface StreamTextOptions extends StreamingOptions {
+export interface StreamTextOptions extends BaseStreamOptions {
   /**
-   * `provider:model` string (e.g. `anthropic:claude-3-5-sonnet-20240620`).
-   * Defaults to the Anthropic model; resolved through the provider registry.
+   * Free-form `provider:model` string (e.g. `anthropic:claude-3-5-sonnet-20240620`,
+   * `openai:gpt-5`). OpenAI-compatible endpoints route through the Responses API.
    */
   modelString?: string;
+
+  /**
+   * Client-supplied provider configuration (persisted in the browser). This is the
+   * only source of API keys and endpoints — there is no environment fallback.
+   */
+  providerConfigs: ProviderConfigs;
 }
 
-export function streamText(messages: Messages, env: Env, options?: StreamTextOptions) {
-  const { modelString, ...streamOptions } = options ?? {};
+export function streamText(messages: ModelMessage[], options: StreamTextOptions) {
+  const { modelString, providerConfigs, ...streamOptions } = options;
 
   return _streamText({
-    model: getModel(getProviderKeys(env), modelString),
+    model: getModel(providerConfigs, modelString),
     system: getSystemPrompt(),
-    maxTokens: MAX_TOKENS,
-    headers: {
-      'anthropic-beta': 'max-tokens-3-5-sonnet-2024-07-15',
-    },
-    messages: convertToCoreMessages(messages),
+    maxOutputTokens: getModelLimits(modelString).maxTokens,
+    messages,
     ...streamOptions,
-  });
+  } as Parameters<typeof _streamText>[0]);
 }

@@ -5,6 +5,10 @@ import { nodePolyfills } from 'vite-plugin-node-polyfills';
 import { optimizeCssModules } from 'vite-plugin-optimize-css-modules';
 import tsconfigPaths from 'vite-tsconfig-paths';
 
+// the server adapter: 'cloudflare' (Pages/Workers) or 'node'. Defaults to 'node'
+// so the app runs without any Cloudflare tooling.
+const ADAPTER = process.env.ADAPTER ?? 'node';
+
 export default defineConfig((config) => {
   return {
     build: {
@@ -14,7 +18,7 @@ export default defineConfig((config) => {
       nodePolyfills({
         include: ['path', 'buffer'],
       }),
-      config.mode !== 'test' && remixCloudflareDevProxy(),
+      config.mode !== 'test' && ADAPTER === 'cloudflare' && remixCloudflareDevProxy(),
       remixVitePlugin({
         future: {
           v3_fetcherPersist: true,

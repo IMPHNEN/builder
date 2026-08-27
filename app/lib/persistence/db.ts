@@ -1,4 +1,4 @@
-import type { Message } from 'ai';
+import type { UIMessage } from 'ai';
 import { createScopedLogger } from '~/utils/logger';
 import type { ChatHistoryItem } from './useChatHistory';
 
@@ -7,7 +7,7 @@ const logger = createScopedLogger('ChatHistory');
 // this is used at the top level and never rejects
 export async function openDatabase(): Promise<IDBDatabase | undefined> {
   return new Promise((resolve) => {
-    const request = indexedDB.open('boltHistory', 1);
+    const request = indexedDB.open('boltHistory', 2);
 
     request.onupgradeneeded = (event: IDBVersionChangeEvent) => {
       const db = (event.target as IDBOpenDBRequest).result;
@@ -16,6 +16,10 @@ export async function openDatabase(): Promise<IDBDatabase | undefined> {
         const store = db.createObjectStore('chats', { keyPath: 'id' });
         store.createIndex('id', 'id', { unique: true });
         store.createIndex('urlId', 'urlId', { unique: true });
+      }
+
+      if (!db.objectStoreNames.contains('settings')) {
+        db.createObjectStore('settings', { keyPath: 'key' });
       }
     };
 
@@ -51,7 +55,7 @@ export async function getAll(db: IDBDatabase): Promise<ChatHistoryItem[]> {
 export async function setMessages(
   db: IDBDatabase,
   id: string,
-  messages: Message[],
+  messages: UIMessage[],
   urlId?: string,
   description?: string,
 ): Promise<void> {
@@ -149,6 +153,28 @@ export async function exportChats(db: IDBDatabase): Promise<ChatExport> {
     exportedAt: new Date().toISOString(),
     chats,
   };
+}
+
+export async function getSetting<T>(db: IDBDatabase, key: string): Promise<T | undefined> {
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction('settings', 'readonly');
+    const store = transaction.objectStore('settings');
+    const request = store.get(key);
+
+    request.onsuccess = () => resolve(request.result?.value as T | undefined);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function setSetting<T>(db: IDBDatabase, key: string, value: T): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction('settings', 'readwrite');
+    const store = transaction.objectStore('settings');
+    const request = store.put({ key, value });
+
+    request.onsuccess = () => resolve(undefined);
+    request.onerror = () => reject(request.error);
+  });
 }
 
 export async function getNextId(db: IDBDatabase): Promise<string> {

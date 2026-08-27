@@ -1,78 +1,87 @@
-import type { AppLoadContext, EntryContext } from '@remix-run/cloudflare';
+import { PassThrough } from 'node:stream';
+import type { AppLoadContext, EntryContext } from '@remix-run/node';
 import { RemixServer } from '@remix-run/react';
 import { isbot } from 'isbot';
-import { renderToReadableStream } from 'react-dom/server';
+import { renderToPipeableStream } from 'react-dom/server';
 import { renderHeadToString } from 'remix-island';
 import { Head } from './root';
 import { themeStore } from '~/lib/stores/theme';
 
-export default async function handleRequest(
+const ABORT_DELAY = 5000;
+
+export default function handleRequest(
   request: Request,
   responseStatusCode: number,
   responseHeaders: Headers,
   remixContext: EntryContext,
   _loadContext: AppLoadContext,
 ) {
-  const readable = await renderToReadableStream(<RemixServer context={remixContext} url={request.url} />, {
-    signal: request.signal,
-    onError(error: unknown) {
-      console.error(error);
-      responseStatusCode = 500;
-    },
-  });
+  const bot = isbot(request.headers.get('user-agent') || '');
 
-  const body = new ReadableStream({
-    start(controller) {
-      const head = renderHeadToString({ request, remixContext, Head });
+  return new Promise<Response>((resolve, reject) => {
+    let shellRendered = false;
 
-      controller.enqueue(
-        new Uint8Array(
-          new TextEncoder().encode(
-            `<!DOCTYPE html><html lang="en" data-theme="${themeStore.value}"><head>${head}</head><body><div id="root" class="w-full h-full">`,
-          ),
-        ),
-      );
+    const { pipe, abort } = renderToPipeableStream(<RemixServer context={remixContext} url={request.url} />, {
+      [bot ? 'onAllReady' : 'onShellReady']() {
+        shellRendered = true;
 
-      const reader = readable.getReader();
+        const head = renderHeadToString({ request, remixContext, Head });
 
-      function read() {
-        reader
-          .read()
-          .then(({ done, value }) => {
-            if (done) {
-              controller.enqueue(new Uint8Array(new TextEncoder().encode(`</div></body></html>`)));
+        /**
+         * React renders into this intermediate stream; we concatenate the custom
+         * HTML shell around it into the response body in the correct order.
+         */
+        const reactBody = new PassThrough();
+
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            const encoder = new TextEncoder();
+
+            controller.enqueue(
+              encoder.encode(
+                `<!DOCTYPE html><html lang="en" data-theme="${themeStore.value}"><head>${head}</head><body><div id="root" class="w-full h-full">`,
+              ),
+            );
+
+            reactBody.on('data', (chunk: Buffer) => controller.enqueue(new Uint8Array(chunk)));
+
+            reactBody.on('end', () => {
+              controller.enqueue(encoder.encode('</div></body></html>'));
               controller.close();
+            });
 
-              return;
-            }
+            reactBody.on('error', (error) => controller.error(error));
+          },
+          cancel() {
+            reactBody.destroy();
+          },
+        });
 
-            controller.enqueue(value);
-            read();
-          })
-          .catch((error) => {
-            controller.error(error);
-            readable.cancel();
-          });
-      }
-      read();
-    },
+        responseHeaders.set('Content-Type', 'text/html');
+        responseHeaders.set('Cross-Origin-Embedder-Policy', 'require-corp');
+        responseHeaders.set('Cross-Origin-Opener-Policy', 'same-origin');
 
-    cancel() {
-      readable.cancel();
-    },
-  });
+        resolve(
+          new Response(body, {
+            headers: responseHeaders,
+            status: responseStatusCode,
+          }),
+        );
 
-  if (isbot(request.headers.get('user-agent') || '')) {
-    await readable.allReady;
-  }
+        pipe(reactBody);
+      },
+      onShellError(error: unknown) {
+        reject(error);
+      },
+      onError(error: unknown) {
+        responseStatusCode = 500;
 
-  responseHeaders.set('Content-Type', 'text/html');
+        if (shellRendered) {
+          console.error(error);
+        }
+      },
+    });
 
-  responseHeaders.set('Cross-Origin-Embedder-Policy', 'require-corp');
-  responseHeaders.set('Cross-Origin-Opener-Policy', 'same-origin');
-
-  return new Response(body, {
-    headers: responseHeaders,
-    status: responseStatusCode,
+    setTimeout(abort, ABORT_DELAY);
   });
 }

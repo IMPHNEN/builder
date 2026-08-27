@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { getProviderSettings, getSelectedModel } from '~/lib/stores/provider';
 import { createScopedLogger } from '~/utils/logger';
 
 const logger = createScopedLogger('usePromptEnhancement');
@@ -20,6 +21,8 @@ export function usePromptEnhancer() {
       method: 'POST',
       body: JSON.stringify({
         message: input,
+        model: getSelectedModel(),
+        providerConfigs: getProviderSettings(),
       }),
     });
 

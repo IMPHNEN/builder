@@ -1,5 +1,5 @@
 // @vitest-environment node
-import type { Message } from 'ai';
+import type { UIMessage } from 'ai';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { ChatHistoryItem } from './useChatHistory';
 
@@ -122,9 +122,9 @@ describe('chat history (SQLite semantics)', () => {
 
   it('should round-trip messages through export shape', () => {
     const messages = [
-      { role: 'user', content: 'hello' },
-      { role: 'assistant', content: 'hi' },
-    ] as unknown as Message[];
+      { id: '1', role: 'user', parts: [{ type: 'text', text: 'hello' }] },
+      { id: '2', role: 'assistant', parts: [{ type: 'text', text: 'hi' }] },
+    ] as unknown as UIMessage[];
 
     insertChat(db, chat('1', '2024-01-01T00:00:00Z', { messages }));
 

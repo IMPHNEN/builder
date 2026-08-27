@@ -1,56 +1,82 @@
 import { type ActionFunctionArgs } from '@remix-run/cloudflare';
+import {
+  convertToModelMessages,
+  createUIMessageStream,
+  createUIMessageStreamResponse,
+  toUIMessageStream,
+  type ModelMessage,
+  type UIMessage,
+} from 'ai';
 import { MAX_RESPONSE_SEGMENTS, MAX_TOKENS } from '~/lib/.server/llm/constants';
 import { CONTINUE_PROMPT } from '~/lib/.server/llm/prompts';
-import { streamText, type Messages, type StreamingOptions } from '~/lib/.server/llm/stream-text';
-import SwitchableStream from '~/lib/.server/llm/switchable-stream';
+import { resolveProviderConfigs } from '~/lib/.server/llm/provider-config';
+import type { ProviderConfigs } from '~/lib/.server/llm/registry';
+import { streamText, type StreamTextOptions } from '~/lib/.server/llm/stream-text';
 import { logLLMError, logLLMEvent } from '~/lib/.server/llm/telemetry';
 
 export async function action(args: ActionFunctionArgs) {
   return chatAction(args);
 }
 
-async function chatAction({ context, request }: ActionFunctionArgs) {
-  const { messages } = await request.json<{ messages: Messages }>();
+interface ChatRequestBody {
+  messages: UIMessage[];
+  model?: string;
+  providerConfigs?: ProviderConfigs;
+}
 
-  const stream = new SwitchableStream();
+async function chatAction({ request }: ActionFunctionArgs) {
+  const { messages, model, providerConfigs } = await request.json<ChatRequestBody>();
+
+  const resolvedConfigs = resolveProviderConfigs(providerConfigs);
 
   try {
-    const options: StreamingOptions = {
-      toolChoice: 'none',
-      onFinish: async ({ text: content, finishReason }) => {
-        if (finishReason !== 'length') {
-          return stream.close();
+    const stream = createUIMessageStream({
+      execute: async ({ writer }) => {
+        let segment = 0;
+        let currentMessages: ModelMessage[] = await convertToModelMessages(messages);
+
+        while (true) {
+          const options: StreamTextOptions = {
+            toolChoice: 'none',
+            modelString: model,
+            providerConfigs: resolvedConfigs,
+          };
+
+          const result = await streamText(currentMessages, options);
+
+          writer.merge(
+            toUIMessageStream({
+              stream: result.stream,
+              sendStart: segment === 0,
+              sendFinish: false,
+            }),
+          );
+
+          const finishReason = await result.finishReason;
+
+          if (finishReason !== 'length') {
+            break;
+          }
+
+          segment += 1;
+
+          if (segment >= MAX_RESPONSE_SEGMENTS) {
+            logLLMError('chat.segments_exhausted', { switches: segment, maxSegments: MAX_RESPONSE_SEGMENTS });
+            break;
+          }
+
+          logLLMEvent('chat.continue', { maxTokens: MAX_TOKENS, switchesLeft: MAX_RESPONSE_SEGMENTS - segment });
+
+          const responseMessages = (await result.response).messages;
+
+          currentMessages = [...currentMessages, ...responseMessages, { role: 'user', content: CONTINUE_PROMPT }];
         }
 
-        if (stream.switches >= MAX_RESPONSE_SEGMENTS) {
-          logLLMError('chat.segments_exhausted', { switches: stream.switches, maxSegments: MAX_RESPONSE_SEGMENTS });
-
-          throw Error('Cannot continue message: Maximum segments reached');
-        }
-
-        const switchesLeft = MAX_RESPONSE_SEGMENTS - stream.switches;
-
-        logLLMEvent('chat.continue', { maxTokens: MAX_TOKENS, switchesLeft });
-
-        messages.push({ role: 'assistant', content });
-        messages.push({ role: 'user', content: CONTINUE_PROMPT });
-
-        const result = await streamText(messages, context.cloudflare.env, options);
-
-        return stream.switchSource(result.toAIStream());
-      },
-    };
-
-    const result = await streamText(messages, context.cloudflare.env, options);
-
-    stream.switchSource(result.toAIStream());
-
-    return new Response(stream.readable, {
-      status: 200,
-      headers: {
-        contentType: 'text/plain; charset=utf-8',
+        writer.write({ type: 'finish' });
       },
     });
+
+    return createUIMessageStreamResponse({ stream });
   } catch (error) {
     logLLMError('chat.stream_failed', { error });
 
