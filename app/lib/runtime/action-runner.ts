@@ -1,14 +1,14 @@
-import { WebContainer } from '@webcontainer/api';
 import { map, type MapStore } from 'nanostores';
 import * as nodePath from 'node:path';
 import type { BoltAction } from '~/types/actions';
 import { createScopedLogger } from '~/utils/logger';
 import { unreachable } from '~/utils/unreachable';
+import { withResolvers } from '~/utils/promises';
 import type { ActionCallbackData } from './message-parser';
 
 const logger = createScopedLogger('ActionRunner');
 
-export type ActionStatus = 'pending' | 'running' | 'complete' | 'aborted' | 'failed';
+export type ActionStatus = 'pending' | 'awaiting-approval' | 'running' | 'complete' | 'aborted' | 'rejected' | 'failed';
 
 export type BaseActionState = BoltAction & {
   status: Exclude<ActionStatus, 'failed'>;
@@ -25,6 +25,25 @@ export type FailedActionState = BoltAction &
 
 export type ActionState = BaseActionState | FailedActionState;
 
+interface ActionProcess {
+  readonly output: ReadableStream<string>;
+  readonly exit: Promise<number>;
+  readonly kill: () => void;
+}
+
+export interface ActionRunnerWebContainer {
+  readonly workdir: string;
+  readonly fs: {
+    readonly mkdir: (path: string, options: { readonly recursive: true }) => Promise<string>;
+    readonly writeFile: (path: string, data: string) => Promise<void>;
+  };
+  readonly spawn: (
+    command: string,
+    args: string[],
+    options?: { readonly env?: Record<string, string | number | boolean> },
+  ) => Promise<ActionProcess>;
+}
+
 type BaseActionUpdate = Partial<Pick<BaseActionState, 'status' | 'abort' | 'executed' | 'content'>>;
 
 export type ActionStateUpdate =
@@ -34,13 +53,16 @@ export type ActionStateUpdate =
 type ActionsMap = MapStore<Record<string, ActionState>>;
 
 export class ActionRunner {
-  #webcontainer: Promise<WebContainer>;
+  #webcontainer: Promise<ActionRunnerWebContainer>;
   #currentExecutionPromise: Promise<void> = Promise.resolve();
+  #pendingApprovals = new Map<string, PromiseWithResolvers<ActionDecision>>();
+  #onStateChange?: () => void;
 
   actions: ActionsMap = map({});
 
-  constructor(webcontainerPromise: Promise<WebContainer>) {
+  constructor(webcontainerPromise: Promise<ActionRunnerWebContainer>, onStateChange?: () => void) {
     this.#webcontainer = webcontainerPromise;
+    this.#onStateChange = onStateChange;
   }
 
   addAction(data: ActionCallbackData) {
@@ -66,17 +88,20 @@ export class ActionRunner {
       executed: false,
       abort: () => {
         abortController.abort();
+        this.#pendingApprovals.get(actionId)?.resolve('aborted');
         this.#updateAction(actionId, { status: 'aborted' });
       },
       abortSignal: abortController.signal,
     });
 
     this.#currentExecutionPromise.then(() => {
-      this.#updateAction(actionId, { status: 'running' });
+      if (this.actions.get()[actionId]?.status === 'pending') {
+        this.#updateAction(actionId, { status: 'running' });
+      }
     });
   }
 
-  async runAction(data: ActionCallbackData) {
+  runAction(data: ActionCallbackData) {
     const { actionId } = data;
     const action = this.actions.get()[actionId];
 
@@ -85,10 +110,36 @@ export class ActionRunner {
     }
 
     if (action.executed) {
-      return;
+      return this.#currentExecutionPromise;
     }
 
-    this.#updateAction(actionId, { ...action, ...data.action, executed: true });
+    const updatedAction = { ...action, ...data.action, executed: true };
+
+    if (action.type === 'file') {
+      this.#updateAction(actionId, { ...updatedAction, status: 'awaiting-approval' });
+
+      const approval = withResolvers<ActionDecision>();
+      this.#pendingApprovals.set(actionId, approval);
+      this.#currentExecutionPromise = this.#currentExecutionPromise
+        .then(async () => {
+          const decision = await this.#awaitApproval(actionId, approval.promise);
+
+          if (decision !== 'approved') {
+            this.#updateAction(actionId, { status: decision });
+
+            return;
+          }
+
+          await this.#executeAction(actionId);
+        })
+        .catch((error) => {
+          console.error('Action failed:', error);
+        });
+
+      return this.#currentExecutionPromise;
+    }
+
+    this.#updateAction(actionId, updatedAction);
 
     this.#currentExecutionPromise = this.#currentExecutionPromise
       .then(() => {
@@ -97,6 +148,8 @@ export class ActionRunner {
       .catch((error) => {
         console.error('Action failed:', error);
       });
+
+    return this.#currentExecutionPromise;
   }
 
   async #executeAction(actionId: string) {
@@ -128,6 +181,28 @@ export class ActionRunner {
 
       // re-throw the error to be caught in the promise chain
       throw error;
+    }
+  }
+
+  approveAction(actionId: string) {
+    this.#pendingApprovals.get(actionId)?.resolve('approved');
+  }
+
+  rejectAction(actionId: string) {
+    const approval = this.#pendingApprovals.get(actionId);
+
+    approval?.resolve('rejected');
+
+    if (approval) {
+      this.#updateAction(actionId, { status: 'rejected' });
+    }
+  }
+
+  async #awaitApproval(actionId: string, promise: Promise<ActionDecision>): Promise<ActionDecision> {
+    try {
+      return await promise;
+    } finally {
+      this.#pendingApprovals.delete(actionId);
     }
   }
 
@@ -196,5 +271,8 @@ export class ActionRunner {
     const actions = this.actions.get();
 
     this.actions.setKey(id, { ...actions[id], ...newState });
+    this.#onStateChange?.();
   }
 }
+
+type ActionDecision = 'approved' | 'rejected' | 'aborted';

@@ -86,31 +86,32 @@ Builds on Phase 4 (rename / export / `deleteByUrlId` in `app/lib/persistence/db.
 
 ## Milestone D — Agent & Editor Depth
 
-### D1. Diff-review before apply `[~]`
+### D1. Diff-review before apply `[x]`
 
 - **What:** show model-proposed file changes as a diff the user can accept/reject before `ActionRunner` writes them.
-- **Touches:** `lib/runtime/action-runner.ts` (stage vs. commit), a new diff view in `components/editor/`, `lib/stores/workbench.ts`.
-- **Blocked on:** UX decision (inline vs. modal review).
+- **Touches:** `lib/runtime/action-runner.ts` (stage vs. commit), `components/editor/FileReviewDialog.client.tsx`, and `lib/stores/workbench.ts`.
+- **Implemented:** modal review for each model file action; Accept/Reject gates the serialized action queue and aborts reject safely.
 - **Effort:** M · **Value:** High
 
-### D2. Terminal: lazy-mount inactive terminals `[ ]`
+### D2. Terminal: lazy-mount inactive terminals `[x]`
 
 - **What:** today all terminals (even `hidden` ones) spawn a WebContainer shell on mount (`EditorPanel.tsx`). Only spawn the active one; spawn others on first activation.
-- **Touches:** `components/workbench/EditorPanel.tsx`, `lib/stores/terminal.ts`.
-- **Note:** needs a real-browser check (xterm `fit()`/resize behavior) — Playwright, not vitest. Carried over from Phase 3 (W3).
+- **Touches:** `components/workbench/EditorPanel.tsx`, `components/workbench/TerminalPanel.client.tsx`, and `lib/stores/terminal.ts`.
+- **Implemented:** only the active terminal mounts initially; later tabs mount on first activation and remain mounted. Needs a real-browser check for xterm `fit()`/resize behavior.
 - **Effort:** S · **Value:** Medium (resource usage)
 
-### D3. `<bolt_file_modifications>` round-trip integrity `[ ]`
+### D3. `<bolt_file_modifications>` round-trip integrity `[x]`
 
 - **What:** verify a returned diff applies cleanly to the current FS; surface conflicts back to the model.
-- **Touches:** `utils/diff.ts`, `lib/stores/files.ts`, the chat route.
-- **Note:** requires a WebContainer FS — integration/e2e (Playwright), not vitest.
+- **Touches:** `utils/diff.ts`, `lib/stores/files.ts`, `lib/stores/workbench.ts`, and `components/chat/Chat.client.tsx`.
+- **Implemented:** unified patches are applied against a baseline and verified against the current `FileMap`; conflicts are included in the next model request. A real WebContainer integration check remains recommended.
 - **Effort:** M · **Value:** Medium
 
-### D4. File-tree virtualization `[ ]`
+### D4. File-tree virtualization `[x]`
 
-- **What:** `FileTree.tsx` (343 lines) renders every node; virtualize for large projects.
-- **Touches:** `components/workbench/FileTree.tsx`.
+- **What:** `FileTree.tsx` rendered every node; virtualize for large projects.
+- **Touches:** `components/workbench/FileTree.tsx`, `components/workbench/FileTreeNode.tsx`, `components/workbench/file-tree-model.ts`.
+- **Implemented:** fixed-row overscanned viewport renders only visible tree nodes while preserving collapse, selection, and unsaved markers.
 - **Effort:** M · **Value:** Medium (perf on big repos)
 
 ---

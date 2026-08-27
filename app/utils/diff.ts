@@ -1,4 +1,4 @@
-import { createTwoFilesPatch } from 'diff';
+import { applyPatch, createTwoFilesPatch } from 'diff';
 import type { FileMap } from '~/lib/stores/files';
 import { MODIFICATIONS_TAG_NAME } from './constants';
 
@@ -7,12 +7,30 @@ export const modificationsRegex = new RegExp(
   'g',
 );
 
-interface ModifiedFile {
-  type: 'diff' | 'file';
-  content: string;
+export interface FileModification {
+  readonly type: 'diff' | 'file';
+  readonly content: string;
 }
 
-type FileModifications = Record<string, ModifiedFile>;
+export type FileModifications = Record<string, FileModification>;
+
+export interface FileModificationConflict {
+  readonly filePath: string;
+  readonly reason: 'missing-file' | 'patch-not-applicable' | 'round-trip-mismatch';
+}
+
+export type FileModificationApplication =
+  | { readonly status: 'applied'; readonly files: FileMap }
+  | { readonly status: 'conflict'; readonly conflicts: readonly FileModificationConflict[] };
+
+export type FileModificationVerification =
+  | { readonly status: 'clean' }
+  | { readonly status: 'valid'; readonly modifications: FileModifications }
+  | {
+      readonly status: 'conflict';
+      readonly modifications: FileModifications;
+      readonly conflicts: readonly FileModificationConflict[];
+    };
 
 export function computeFileModifications(files: FileMap, modifiedFiles: Map<string, string>) {
   const modifications: FileModifications = {};
@@ -105,4 +123,69 @@ export function fileModificationsToHTML(modifications: FileModifications) {
   result.push(`</${MODIFICATIONS_TAG_NAME}>`);
 
   return result.join('\n');
+}
+
+export function applyFileModifications(files: FileMap, modifications: FileModifications): FileModificationApplication {
+  const nextFiles = { ...files };
+  const conflicts: FileModificationConflict[] = [];
+
+  for (const [filePath, modification] of Object.entries(modifications)) {
+    if (modification.type === 'file') {
+      nextFiles[filePath] = { type: 'file', content: modification.content, isBinary: false };
+      continue;
+    }
+
+    const file = files[filePath];
+
+    if (file?.type !== 'file') {
+      conflicts.push({ filePath, reason: 'missing-file' });
+      continue;
+    }
+
+    const patchedContent = applyPatch(file.content, `--- ${filePath}\n+++ ${filePath}\n${modification.content}`);
+
+    if (patchedContent === false) {
+      conflicts.push({ filePath, reason: 'patch-not-applicable' });
+      continue;
+    }
+
+    nextFiles[filePath] = { ...file, content: patchedContent, isBinary: false };
+  }
+
+  return conflicts.length > 0 ? { status: 'conflict', conflicts } : { status: 'applied', files: nextFiles };
+}
+
+export function verifyFileModifications(
+  currentFiles: FileMap,
+  baselineFiles: FileMap,
+  modifications: FileModifications | undefined,
+): FileModificationVerification {
+  if (!modifications) {
+    return { status: 'clean' };
+  }
+
+  const applied = applyFileModifications(baselineFiles, modifications);
+
+  if (applied.status === 'conflict') {
+    return { status: 'conflict', modifications, conflicts: applied.conflicts };
+  }
+
+  const conflicts: FileModificationConflict[] = [];
+
+  for (const filePath of Object.keys(modifications)) {
+    const current = currentFiles[filePath];
+    const result = applied.files[filePath];
+
+    if (current?.type !== 'file' || result?.type !== 'file' || current.content !== result.content) {
+      conflicts.push({ filePath, reason: 'round-trip-mismatch' });
+    }
+  }
+
+  return conflicts.length > 0 ? { status: 'conflict', modifications, conflicts } : { status: 'valid', modifications };
+}
+
+export function fileModificationConflictsToPrompt(conflicts: readonly FileModificationConflict[]): string {
+  const lines = conflicts.map(({ filePath, reason }) => `- ${filePath}: ${reason}`);
+
+  return ['The following user file changes could not be applied cleanly:', ...lines].join('\n');
 }

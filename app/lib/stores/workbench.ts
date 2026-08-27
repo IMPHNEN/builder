@@ -4,7 +4,10 @@ import { ActionRunner } from '~/lib/runtime/action-runner';
 import type { ActionCallbackData, ArtifactCallbackData } from '~/lib/runtime/message-parser';
 import { webcontainer } from '~/lib/webcontainer';
 import type { ITerminal } from '~/types/terminal';
+import { diffFiles } from '~/utils/diff';
+import { WORK_DIR } from '~/utils/constants';
 import { unreachable } from '~/utils/unreachable';
+import { exportGitHubProject, importGitHubProject } from '~/lib/github/project';
 import { EditorStore } from './editor';
 import { FilesStore, type FileMap } from './files';
 import { PreviewsStore } from './previews';
@@ -23,6 +26,15 @@ type Artifacts = MapStore<Record<string, ArtifactState>>;
 
 export type WorkbenchViewType = 'code' | 'preview';
 
+export interface PendingFileReview {
+  readonly messageId: string;
+  readonly actionId: string;
+  readonly filePath: string;
+  readonly currentContent: string;
+  readonly proposedContent: string;
+  readonly diff: string;
+}
+
 export class WorkbenchStore {
   #previewsStore = new PreviewsStore(webcontainer);
   #filesStore = new FilesStore(webcontainer);
@@ -34,6 +46,8 @@ export class WorkbenchStore {
   showWorkbench: WritableAtom<boolean> = import.meta.hot?.data.showWorkbench ?? atom(false);
   currentView: WritableAtom<WorkbenchViewType> = import.meta.hot?.data.currentView ?? atom('code');
   unsavedFiles: WritableAtom<Set<string>> = import.meta.hot?.data.unsavedFiles ?? atom(new Set<string>());
+  pendingFileReviews: WritableAtom<PendingFileReview[]> =
+    import.meta.hot?.data.pendingFileReviews ?? atom<PendingFileReview[]>([]);
   modifiedFiles = new Set<string>();
   artifactIdList: string[] = [];
 
@@ -43,7 +57,10 @@ export class WorkbenchStore {
       import.meta.hot.data.unsavedFiles = this.unsavedFiles;
       import.meta.hot.data.showWorkbench = this.showWorkbench;
       import.meta.hot.data.currentView = this.currentView;
+      import.meta.hot.data.pendingFileReviews = this.pendingFileReviews;
     }
+
+    this.#filesStore.files.subscribe(() => this.#refreshFileReviews());
   }
 
   get previews() {
@@ -206,6 +223,10 @@ export class WorkbenchStore {
     return this.#filesStore.getFileModifications();
   }
 
+  getFileModificationResult() {
+    return this.#filesStore.getFileModificationResult();
+  }
+
   resetAllFileModifications() {
     this.#filesStore.resetFileModifications();
   }
@@ -213,7 +234,7 @@ export class WorkbenchStore {
   abortAllActions() {
     for (const artifact of Object.values(this.artifacts.get())) {
       for (const action of Object.values(artifact.runner.actions.get())) {
-        if (!action.executed || action.status === 'running') {
+        if (!action.executed || action.status === 'running' || action.status === 'awaiting-approval') {
           action.abort();
         }
       }
@@ -225,19 +246,9 @@ export class WorkbenchStore {
    * the new files up into the FileMap automatically.
    */
   async importFromGitHub(repoInput: string) {
-    const { GitHubClient: githubClient, parseRepoRef } = await import('~/lib/github/client');
-    const { getGitHubToken } = await import('~/lib/stores/provider');
-
-    const token = getGitHubToken();
-
-    if (!token) {
-      throw new Error('Add a GitHub token in Model settings first');
-    }
-
-    const client = new githubClient(token);
     const container = await webcontainer;
 
-    return client.cloneIntoProject(container, parseRepoRef(repoInput));
+    return importGitHubProject(repoInput, container);
   }
 
   /**
@@ -246,55 +257,15 @@ export class WorkbenchStore {
    * via the active model, falling back to a default on any failure.
    */
   async exportToGitHub(repoInput: string, message?: string) {
-    const { GitHubClient: githubClient, parseRepoRef } = await import('~/lib/github/client');
-    const { getGitHubToken } = await import('~/lib/stores/provider');
-
-    const token = getGitHubToken();
-
-    if (!token) {
-      throw new Error('Add a GitHub token in Model settings first');
-    }
-
-    await this.saveAllFiles();
-
-    const commitMessage = message ?? (await this.#generateCommitMessage());
-
-    const client = new githubClient(token);
     const container = await webcontainer;
 
-    return client.pushProject(container, parseRepoRef(repoInput), commitMessage);
-  }
-
-  async #generateCommitMessage(): Promise<string> {
-    const fallback = `chore: update project from Bolt (${new Date().toISOString().slice(0, 10)})`;
-
-    try {
-      const { getProviderSettings, getSelectedModel } = await import('~/lib/stores/provider');
-      const { fileModificationsToHTML } = await import('~/utils/diff');
-
-      const modifications = this.#filesStore.getFileModifications();
-      const diff = modifications ? fileModificationsToHTML(modifications) : undefined;
-
-      const response = await fetch('/api/commit-message', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          diff,
-          model: getSelectedModel(),
-          providerConfigs: getProviderSettings(),
-        }),
-      });
-
-      if (!response.ok) {
-        return fallback;
-      }
-
-      const text = (await response.text()).trim().split('\n')[0].trim();
-
-      return text.length > 0 ? text : fallback;
-    } catch {
-      return fallback;
-    }
+    return exportGitHubProject({
+      repoInput,
+      message,
+      container,
+      filesStore: this.#filesStore,
+      saveAllFiles: () => this.saveAllFiles(),
+    });
   }
 
   addArtifact({ messageId, title, id }: ArtifactCallbackData) {
@@ -312,7 +283,7 @@ export class WorkbenchStore {
       id,
       title,
       closed: false,
-      runner: new ActionRunner(webcontainer),
+      runner: new ActionRunner(webcontainer, () => this.#refreshFileReviews()),
     });
   }
 
@@ -350,6 +321,41 @@ export class WorkbenchStore {
     artifact.runner.runAction(data);
   }
 
+  approveFileAction(messageId: string, actionId: string) {
+    this.#getArtifact(messageId)?.runner.approveAction(actionId);
+  }
+
+  rejectFileAction(messageId: string, actionId: string) {
+    this.#getArtifact(messageId)?.runner.rejectAction(actionId);
+  }
+
+  #refreshFileReviews() {
+    const reviews: PendingFileReview[] = [];
+
+    for (const [messageId, artifact] of Object.entries(this.artifacts.get())) {
+      for (const [actionId, action] of Object.entries(artifact.runner.actions.get())) {
+        if (action.type !== 'file' || action.status !== 'awaiting-approval') {
+          continue;
+        }
+
+        const filePath = projectFilePath(action.filePath);
+        const currentContent = this.#filesStore.getFile(filePath)?.content ?? '';
+        const diff = diffFiles(action.filePath, currentContent, action.content) ?? action.content;
+
+        reviews.push({
+          messageId,
+          actionId,
+          filePath: action.filePath,
+          currentContent,
+          proposedContent: action.content,
+          diff,
+        });
+      }
+    }
+
+    this.pendingFileReviews.set(reviews);
+  }
+
   #getArtifact(id: string) {
     const artifacts = this.artifacts.get();
     return artifacts[id];
@@ -357,3 +363,11 @@ export class WorkbenchStore {
 }
 
 export const workbenchStore = new WorkbenchStore();
+
+function projectFilePath(filePath: string): string {
+  if (filePath.startsWith(WORK_DIR)) {
+    return filePath;
+  }
+
+  return `${WORK_DIR}/${filePath.replace(/^\/+/, '').replace(/^\.\//, '')}`;
+}

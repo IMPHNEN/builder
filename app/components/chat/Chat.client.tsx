@@ -9,7 +9,7 @@ import { useChatHistory } from '~/lib/persistence';
 import { chatStore } from '~/lib/stores/chat';
 import { loadProviderSettings, providerStore } from '~/lib/stores/provider';
 import { workbenchStore } from '~/lib/stores/workbench';
-import { fileModificationsToHTML } from '~/utils/diff';
+import { fileModificationConflictsToPrompt, fileModificationsToHTML } from '~/utils/diff';
 import { cubicEasingFn } from '~/utils/easings';
 import { createScopedLogger, renderLogger } from '~/utils/logger';
 import { getMessageText } from '~/utils/message';
@@ -187,21 +187,19 @@ export const ChatImpl = memo(({ initialMessages, storeMessageHistory }: ChatProp
      */
     await workbenchStore.saveAllFiles();
 
-    const fileModifications = workbenchStore.getFileModifcations();
+    const fileModificationResult = workbenchStore.getFileModificationResult();
 
     chatStore.setKey('aborted', false);
 
     runAnimation();
 
-    if (fileModifications !== undefined) {
-      const diff = fileModificationsToHTML(fileModifications);
+    if (fileModificationResult.status === 'conflict') {
+      sendMessage({ text: `${fileModificationConflictsToPrompt(fileModificationResult.conflicts)}\n\n${_input}` });
+      workbenchStore.resetAllFileModifications();
+    } else if (fileModificationResult.status === 'valid') {
+      const diff = fileModificationsToHTML(fileModificationResult.modifications);
 
-      sendMessage({ text: `${diff}\n\n${_input}` });
-
-      /**
-       * After sending a new message we reset all modifications since the model
-       * should now be aware of all the changes.
-       */
+      sendMessage({ text: diff ? `${diff}\n\n${_input}` : _input });
       workbenchStore.resetAllFileModifications();
     } else {
       sendMessage({ text: _input });

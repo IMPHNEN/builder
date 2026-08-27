@@ -7,6 +7,7 @@ import { coloredText } from '~/utils/terminal';
 export class TerminalStore {
   #webcontainer: Promise<WebContainer>;
   #terminals: Array<{ terminal: ITerminal; process: WebContainerProcess }> = [];
+  #attachedTerminals = new WeakSet<ITerminal>();
 
   showTerminal: WritableAtom<boolean> = import.meta.hot?.data.showTerminal ?? atom(false);
 
@@ -23,12 +24,21 @@ export class TerminalStore {
   }
 
   async attachTerminal(terminal: ITerminal) {
+    if (this.#attachedTerminals.has(terminal)) {
+      return;
+    }
+
+    this.#attachedTerminals.add(terminal);
+
     try {
       const shellProcess = await newShellProcess(await this.#webcontainer, terminal);
       this.#terminals.push({ terminal, process: shellProcess });
-    } catch (error: any) {
-      terminal.write(coloredText.red('Failed to spawn shell\n\n') + error.message);
-      return;
+    } catch (error: unknown) {
+      this.#attachedTerminals.delete(terminal);
+
+      const message = error instanceof Error ? error.message : 'Unknown shell error';
+
+      terminal.write(coloredText.red('Failed to spawn shell\n\n') + message);
     }
   }
 

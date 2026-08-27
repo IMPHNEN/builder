@@ -152,17 +152,19 @@ const ActionList = memo(({ actions }: ActionListProps) => {
                 <div className={classNames('text-lg', getIconColor(action.status))}>
                   {status === 'running' ? (
                     <div className="i-svg-spinners:90-ring-with-bg"></div>
+                  ) : status === 'awaiting-approval' ? (
+                    <div className="i-ph:warning-circle"></div>
                   ) : status === 'pending' ? (
                     <div className="i-ph:circle-duotone"></div>
                   ) : status === 'complete' ? (
                     <div className="i-ph:check"></div>
-                  ) : status === 'failed' || status === 'aborted' ? (
+                  ) : status === 'failed' || status === 'aborted' || status === 'rejected' ? (
                     <div className="i-ph:x"></div>
                   ) : null}
                 </div>
                 {type === 'file' ? (
                   <div>
-                    Create{' '}
+                    {status === 'awaiting-approval' ? 'Review ' : status === 'rejected' ? 'Rejected ' : 'Create '}
                     <code className="bg-bolt-elements-artifacts-inlineCode-background text-bolt-elements-artifacts-inlineCode-text px-1.5 py-1 rounded-md">
                       {action.filePath}
                     </code>
@@ -197,6 +199,9 @@ function getIconColor(status: ActionState['status']) {
     case 'running': {
       return 'text-bolt-elements-loader-progress';
     }
+    case 'awaiting-approval': {
+      return 'text-bolt-elements-item-contentAccent';
+    }
     case 'complete': {
       return 'text-bolt-elements-icon-success';
     }
@@ -204,6 +209,9 @@ function getIconColor(status: ActionState['status']) {
       return 'text-bolt-elements-textSecondary';
     }
     case 'failed': {
+      return 'text-bolt-elements-icon-error';
+    }
+    case 'rejected': {
       return 'text-bolt-elements-icon-error';
     }
     default: {

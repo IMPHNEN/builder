@@ -5,7 +5,7 @@ import { Buffer } from 'node:buffer';
 import * as nodePath from 'node:path';
 import { bufferWatchEvents } from '~/utils/buffer';
 import { WORK_DIR } from '~/utils/constants';
-import { computeFileModifications } from '~/utils/diff';
+import { computeFileModifications, verifyFileModifications, type FileModificationVerification } from '~/utils/diff';
 import { createScopedLogger } from '~/utils/logger';
 import { unreachable } from '~/utils/unreachable';
 
@@ -75,6 +75,18 @@ export class FilesStore {
 
   getFileModifications() {
     return computeFileModifications(this.files.get(), this.#modifiedFiles);
+  }
+
+  getFileModificationResult(): FileModificationVerification {
+    const currentFiles = this.files.get();
+    const modifications = computeFileModifications(currentFiles, this.#modifiedFiles);
+    const baselineFiles = { ...currentFiles };
+
+    for (const [filePath, content] of this.#modifiedFiles) {
+      baselineFiles[filePath] = { type: 'file', content, isBinary: false };
+    }
+
+    return verifyFileModifications(currentFiles, baselineFiles, modifications);
   }
 
   resetFileModifications() {

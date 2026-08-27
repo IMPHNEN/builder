@@ -1,9 +1,19 @@
-import type { WebContainer } from '@webcontainer/api';
 import { describe, expect, it, vi } from 'vitest';
 import type { ActionCallbackData } from './message-parser';
-import { ActionRunner } from './action-runner';
+import { ActionRunner, type ActionRunnerWebContainer } from './action-runner';
 
-const webcontainerPromise = Promise.resolve({} as WebContainer);
+const webcontainerPromise = Promise.resolve({
+  workdir: '/home/project',
+  fs: {
+    mkdir: async () => '/home/project',
+    writeFile: async () => undefined,
+  },
+  spawn: async () => ({
+    output: new ReadableStream<string>({ start: (controller) => controller.close() }),
+    exit: Promise.resolve(0),
+    kill: vi.fn(),
+  }),
+} satisfies ActionRunnerWebContainer);
 
 function fileActionData(content: string): ActionCallbackData {
   return {
@@ -63,5 +73,56 @@ describe('ActionRunner', () => {
 
     expect(abortSpy).toHaveBeenCalled();
     expect(runner.actions.get()['0'].status).toBe('aborted');
+  });
+
+  it('should wait for approval before writing a file action', async () => {
+    const writeFile = vi.fn(async () => undefined);
+    const webcontainer = {
+      workdir: '/home/project',
+      fs: { mkdir: async () => '/home/project', writeFile },
+      spawn: async () => ({
+        output: new ReadableStream({ start: (controller) => controller.close() }),
+        exit: Promise.resolve(0),
+        kill: vi.fn(),
+      }),
+    } satisfies ActionRunnerWebContainer;
+    const runner = new ActionRunner(Promise.resolve(webcontainer));
+
+    runner.addAction(fileActionData('approved content'));
+    const execution = runner.runAction(fileActionData('approved content'));
+
+    await Promise.resolve();
+    expect(runner.actions.get()['0'].status).toBe('awaiting-approval');
+    expect(writeFile).not.toHaveBeenCalled();
+
+    runner.approveAction('0');
+    await execution;
+
+    expect(writeFile).toHaveBeenCalledWith('index.js', 'approved content');
+    expect(runner.actions.get()['0'].status).toBe('complete');
+  });
+
+  it('should reject a staged file action without writing it', async () => {
+    const writeFile = vi.fn(async () => undefined);
+    const webcontainer = {
+      workdir: '/home/project',
+      fs: { mkdir: async () => '/home/project', writeFile },
+      spawn: async () => ({
+        output: new ReadableStream({ start: (controller) => controller.close() }),
+        exit: Promise.resolve(0),
+        kill: vi.fn(),
+      }),
+    } satisfies ActionRunnerWebContainer;
+    const runner = new ActionRunner(Promise.resolve(webcontainer));
+
+    runner.addAction(fileActionData('rejected content'));
+    const execution = runner.runAction(fileActionData('rejected content'));
+    await Promise.resolve();
+
+    runner.rejectAction('0');
+    await execution;
+
+    expect(writeFile).not.toHaveBeenCalled();
+    expect(runner.actions.get()['0'].status).toBe('rejected');
   });
 });

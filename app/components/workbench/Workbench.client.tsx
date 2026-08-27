@@ -8,6 +8,7 @@ import {
   type OnScrollCallback as OnEditorScroll,
 } from '~/components/editor/codemirror/CodeMirrorEditor';
 import { IconButton } from '~/components/ui/IconButton';
+import { FileReviewDialog } from '~/components/editor/FileReviewDialog.client';
 import { PanelHeaderButton } from '~/components/ui/PanelHeaderButton';
 import { Slider, type SliderOptions } from '~/components/ui/Slider';
 import { workbenchStore, type WorkbenchViewType } from '~/lib/stores/workbench';
@@ -64,6 +65,7 @@ export const Workbench = memo(({ chatStarted, isStreaming }: WorkspaceProps) => 
   const unsavedFiles = useStore(workbenchStore.unsavedFiles);
   const files = useStore(workbenchStore.files);
   const selectedView = useStore(workbenchStore.currentView);
+  const pendingFileReviews = useStore(workbenchStore.pendingFileReviews);
 
   const [githubDialogOpen, setGithubDialogOpen] = useState(false);
 
@@ -190,6 +192,7 @@ export const Workbench = memo(({ chatStarted, isStreaming }: WorkspaceProps) => 
           </div>
         </div>
         <GitHubDialog open={githubDialogOpen} onOpenChange={setGithubDialogOpen} />
+        <FileReviewDialog review={pendingFileReviews[0]} />
       </motion.div>
     )
   );
